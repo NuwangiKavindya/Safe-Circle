@@ -53,6 +53,7 @@ interface DashboardScreenProps {
   onToggleSharingMode?: (contactId: string, currentMode: 'EMERGENCY_ONLY' | 'ALWAYS_ON') => void;
   guardianshipList?: GuardianshipWard[];
   onTrackWard?: (accessCode: string) => void;
+  onOpenOfflineModal?: () => void;
 }
 
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
@@ -86,6 +87,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   onToggleSharingMode,
   guardianshipList = [],
   onTrackWard,
+  onOpenOfflineModal,
 }) => {
   // Safety Circle Active Tab: 'GUARDIANS' (My Protectors) or 'WARDS' (People I Protect)
   const [activeCircleTab, setActiveCircleTab] = React.useState<'GUARDIANS' | 'WARDS'>('GUARDIANS');
@@ -370,6 +372,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           height={260}
           onExpandFullScreen={onNavigateFullScreenMap}
           onCreateSafeZone={onCreateSafeZone}
+          onOpenOfflineModal={onOpenOfflineModal}
         />
 
       </View>

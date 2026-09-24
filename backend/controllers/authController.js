@@ -7,8 +7,12 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || process.env.GOOG
 
 // Generate JWT token
 const generateToken = (id) => {
+    // Use the string format (e.g. "30d") so jsonwebtoken handles unit conversion natively.
+    // The previous formula (* 60 * 60 * 60 * 24) had one extra 60 multiplier, producing
+    // ~177-year tokens. The string format is immune to arithmetic mistakes.
+    const expireDays = parseInt(process.env.JWT_EXPIRE_DAYS, 10) || 30;
     return jwt.sign({ id }, process.env.JWT_SECRET, {
-        expiresIn: process.env.JWT_EXPIRE_DAYS * 60 * 60 * 60 * 24,
+        expiresIn: `${expireDays}d`,
     });
 };
 

@@ -9,6 +9,7 @@ import {
   DimensionValue,
   TextInput,
   Alert,
+  Modal,
 } from 'react-native';
 import {
   Map,
@@ -50,6 +51,7 @@ interface MapViewComponentProps {
   onExpandFullScreen?: () => void;
   onOpenARView?: () => void;
   onCreateSafeZone?: (zoneName: string, radiusMeters: number, latitude: number, longitude: number) => void;
+  onOpenOfflineModal?: () => void;
 }
 
 const MAP_STYLES = {
@@ -73,6 +75,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   onExpandFullScreen,
   onOpenARView,
   onCreateSafeZone,
+  onOpenOfflineModal,
 }) => {
   const { isDark: globalIsDark, toggleTheme: globalToggleTheme } = useTheme();
   const isDarkMode = themeMode ? themeMode === 'dark' : globalIsDark;
@@ -82,7 +85,9 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   // CRITICAL: cameraRef attached directly to <Camera ref={cameraRef} />
   const cameraRef = useRef<CameraRef>(null);
 
-  // Offline Caching State
+  // Offline Caching State & Modal
+  const [isOfflineModalVisible, setIsOfflineModalVisible] = useState<boolean>(false);
+  const [isDownloadingPack, setIsDownloadingPack] = useState<boolean>(false);
   const [cacheProgress, setCacheProgress] = useState<number | null>(null);
   const [isCached, setIsCached] = useState<boolean>(false);
 
@@ -240,25 +245,39 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
     globalToggleTheme();
   };
 
+  // Open Offline Vector Tile Pack Manager Modal
+  const handleOpenOfflineModal = () => {
+    setIsOfflineModalVisible(true);
+  };
+
   // Trigger MapLibre OfflineManager Vector Tile Download
-  const handleDownloadOfflineTiles = async () => {
+  const handleStartPackDownload = async () => {
+    setIsDownloadingPack(true);
     setCacheProgress(0);
     const success = await offlineMapService.cacheRegion(
       {
-        packName: `safecircle-region-${isDarkMode ? 'dark' : 'light'}-${Date.now().toString().slice(-4)}`,
-        latitude,
-        longitude,
+        packName: 'Liberty-Colombo-Bounds',
+        latitude: latitude || 6.9271,
+        longitude: longitude || 79.8612,
         mapStyle: currentStyle,
       },
       progress => setCacheProgress(progress)
     );
 
+    setIsDownloadingPack(false);
     if (success) {
       setIsCached(true);
-      setTimeout(() => setCacheProgress(null), 3000);
+      setCacheProgress(100);
     } else {
       setCacheProgress(null);
     }
+  };
+
+  // Delete cached pack from local SQLite
+  const handleDeleteOfflinePack = async () => {
+    await offlineMapService.deleteCachedPack('Liberty-Colombo-Bounds');
+    setIsCached(false);
+    setCacheProgress(null);
   };
 
   return (
@@ -637,7 +656,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.bottomSheetBtn, { backgroundColor: activeTheme.mapControlBtnBg, borderColor: activeTheme.mapControlBtnBorder }]}
-                onPress={handleDownloadOfflineTiles}
+                onPress={onOpenOfflineModal || handleOpenOfflineModal}
               >
                 <Text style={styles.bottomSheetBtnIcon}>📥</Text>
                 <Text style={[styles.bottomSheetBtnText, { color: activeTheme.mapControlBtnText }]}>Offline Pack</Text>
@@ -685,12 +704,140 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.controlBtn, { backgroundColor: activeTheme.mapControlBtnBg, borderColor: activeTheme.mapControlBtnBorder }]}
-              onPress={handleDownloadOfflineTiles}
+              onPress={() => {
+                if (onOpenOfflineModal) {
+                  onOpenOfflineModal();
+                } else {
+                  handleOpenOfflineModal();
+                }
+              }}
             >
               <Text style={styles.controlBtnIcon}>📥</Text>
             </TouchableOpacity>
           </View>
         )
+      )}
+
+      {/* OFFLINE VECTOR TILE PACK MANAGER MODAL (Section 5.2.3 / Figure 5.8) */}
+      {isOfflineModalVisible && (
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.offlineModalCard, { backgroundColor: activeTheme.cardBg, borderColor: activeTheme.borderDark }]}>
+            {/* Modal Header */}
+            <View style={styles.modalHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={styles.modalTitleIcon}>🗺️</Text>
+                <View>
+                  <Text style={[styles.modalTitleText, { color: activeTheme.textPrimary }]}>Offline Vector Tile Pack</Text>
+                  <Text style={[styles.modalSubtitleText, { color: activeTheme.accentCyan }]}>MapLibre SQLite Storage Lifecycle</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.modalCloseBtn, { backgroundColor: activeTheme.borderDark }]}
+                onPress={() => setIsOfflineModalVisible(false)}
+              >
+                <Text style={[styles.modalCloseBtnText, { color: activeTheme.textPrimary }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Pack Metadata Grid */}
+            <View style={[styles.packMetadataContainer, { backgroundColor: activeTheme.bgDark, borderColor: activeTheme.borderDark }]}>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Pack Identifier:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.accentCyan }]}>Liberty-Colombo-Bounds</Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Center Coordinates:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.textPrimary }]}>
+                  {(latitude || 6.9271).toFixed(4)}° N, {(longitude || 79.8612).toFixed(4)}° E
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Bounding Scope:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.textPrimary }]}>~2.2km Radius (City Metropolitan)</Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Vector Style Source:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.textSecondary }]} numberOfLines={1}>
+                  OpenFreeMap Liberty (Vector GL)
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Zoom Level Range:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.textPrimary }]}>Zoom 10 to Zoom 18 (Street Precision)</Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>Storage Target:</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.accentGreen }]}>
+                  Local SQLite Cache (mbgl-offline.db)
+                </Text>
+              </View>
+            </View>
+
+            {/* Live Progress & Status Box */}
+            <View style={[styles.progressBox, { backgroundColor: activeTheme.bgDark, borderColor: activeTheme.borderDark }]}>
+              <View style={styles.progressHeaderRow}>
+                <Text style={[styles.progressHeaderLabel, { color: activeTheme.textSecondary }]}>Lifecycle Status</Text>
+                <Text style={[styles.progressPercentText, { color: isCached ? activeTheme.accentGreen : activeTheme.accentCyan }]}>
+                  {cacheProgress !== null ? `${cacheProgress}%` : (isCached ? '100%' : 'Idle')}
+                </Text>
+              </View>
+
+              {/* Progress Bar Track */}
+              <View style={[styles.progressBarTrack, { backgroundColor: activeTheme.borderDark }]}>
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    {
+                      width: `${cacheProgress !== null ? cacheProgress : (isCached ? 100 : 0)}%`,
+                      backgroundColor: isCached ? activeTheme.accentGreen : activeTheme.accentCyan,
+                    },
+                  ]}
+                />
+              </View>
+
+              {/* Status Message Text matching Thesis Figure 5.8 */}
+              <View style={styles.statusCalloutRow}>
+                <Text style={styles.statusCalloutIcon}>
+                  {isDownloadingPack ? '⏳' : (isCached ? '✅' : 'ℹ️')}
+                </Text>
+                <Text style={[styles.statusCalloutText, { color: isCached ? '#10B981' : activeTheme.textSecondary }]}>
+                  {isDownloadingPack
+                    ? `Caching vector tiles to SQLite... ${cacheProgress || 0}%`
+                    : isCached
+                    ? "Stored in local SQLite cache. Offline mode active."
+                    : "Pack ready to cache for zero-data GPS fallback."}
+                </Text>
+              </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={[
+                  styles.downloadPackBtn,
+                  { backgroundColor: isDownloadingPack ? activeTheme.borderDark : activeTheme.accentGreen },
+                ]}
+                onPress={handleStartPackDownload}
+                disabled={isDownloadingPack}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.downloadPackBtnText}>
+                  {isDownloadingPack ? '⏳ Downloading...' : (isCached ? '🔄 Re-download Pack' : '📥 Download & Cache Region')}
+                </Text>
+              </TouchableOpacity>
+
+              {isCached && (
+                <TouchableOpacity
+                  style={[styles.deletePackBtn, { backgroundColor: activeTheme.accentRedBg, borderColor: activeTheme.accentRed }]}
+                  onPress={handleDeleteOfflinePack}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.deletePackBtnText, { color: activeTheme.accentRed }]}>🗑️ Delete Pack</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
       )}
     </View>
   );
@@ -1076,5 +1223,154 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 13,
     fontWeight: '800',
+  },
+  /* Offline Vector Tile Pack Modal Styles (Section 5.2.3 / Figure 5.8) */
+  modalBackdrop: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.78)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    zIndex: 9999,
+    elevation: 30,
+  },
+  offlineModalCard: {
+    width: '100%',
+    maxWidth: 440,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTitleIcon: {
+    fontSize: 26,
+    marginRight: 10,
+  },
+  modalTitleText: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  modalSubtitleText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  packMetadataContainer: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 14,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  metaLabel: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  metaValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    maxWidth: '55%',
+    textAlign: 'right',
+  },
+  progressBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 16,
+  },
+  progressHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  progressHeaderLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  progressPercentText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  progressBarTrack: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  statusCalloutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusCalloutIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  statusCalloutText: {
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  downloadPackBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+  },
+  downloadPackBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  deletePackBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deletePackBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

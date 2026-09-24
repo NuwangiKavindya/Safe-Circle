@@ -18,6 +18,7 @@ interface TacticalSplitMapScreenProps {
   onToggleMotionGuard?: (active: boolean) => void;
   onNavigateARView?: () => void;
   onCreateSafeZone?: (zoneName: string, radiusMeters: number, latitude?: number, longitude?: number) => void;
+  onOpenOfflineModal?: () => void;
 }
 
 export const TacticalSplitMapScreen: React.FC<TacticalSplitMapScreenProps> = ({
@@ -31,6 +32,7 @@ export const TacticalSplitMapScreen: React.FC<TacticalSplitMapScreenProps> = ({
   onToggleMotionGuard,
   onNavigateARView,
   onCreateSafeZone,
+  onOpenOfflineModal,
 }) => {
   const [activeTab, setActiveTab] = useState<'telemetry' | 'controls' | 'history'>('telemetry');
   const [isSirenTesting, setIsSirenTesting] = useState(false);
@@ -79,6 +81,7 @@ export const TacticalSplitMapScreen: React.FC<TacticalSplitMapScreenProps> = ({
           safeZones={safeZones}
           onOpenARView={onNavigateARView}
           onCreateSafeZone={onCreateSafeZone}
+          onOpenOfflineModal={onOpenOfflineModal}
         />
       </View>
 

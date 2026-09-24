@@ -10,7 +10,8 @@ export type ScreenType =
   | 'TRACKER_DASHBOARD'
   | 'GOOGLE_PHONE_REGISTER'
   | 'FULLSCREEN_MAP'
-  | 'AR_VIEW';
+  | 'AR_VIEW'
+  | 'IMU_LOGGER'; // DEV ONLY — IMU sensor data recording screen for TFLite dataset collection
 
 export interface UserData {
   id: string;

@@ -36,7 +36,10 @@ import { TrackerDashboardScreen } from './src/screens/TrackerDashboardScreen';
 import { MapViewComponent } from './src/components/MapViewComponent';
 import { ARViewComponent } from './src/components/ARViewComponent';
 import { TacticalSplitMapScreen } from './src/screens/TacticalSplitMapScreen';
+import { OfflinePackModal } from './src/components/OfflinePackModal';
 import { ThemeProvider } from './src/context/ThemeContext';
+// DEV ONLY — IMU sensor data logger for TFLite training dataset collection
+import { ImuLoggerScreen } from './src/screens/ImuLoggerScreen';
 
 const MainApp = () => {
   // Navigation & Session State
@@ -53,6 +56,7 @@ const MainApp = () => {
   const [activeAlert, setActiveAlert] = useState<ApiAlert | null>(null);
   const [isMotionGuardActive, setIsMotionGuardActive] = useState<boolean>(false);
   const [sensitivityMode, setSensitivityMode] = useState<SensitivityMode>('POCKET_GUARD');
+  const [isOfflineModalOpen, setIsOfflineModalOpen] = useState(false);
   const [liveEnergyLevel, setLiveEnergyLevel] = useState<number>(0);
 
   // Grace Countdown Overlay Modal State
@@ -1129,7 +1133,35 @@ const MainApp = () => {
               setTrackerCode(accessCode);
               handleVerifyTrackerCode(accessCode);
             }}
+          onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
           />
+        )}
+
+        {/* DEV ONLY — IMU Data Logger entry button (invisible in production builds) */}
+        {__DEV__ && currentScreen === 'DASHBOARD' && (
+          <TouchableOpacity
+            onPress={() => setCurrentScreen('IMU_LOGGER')}
+            style={{
+              position: 'absolute',
+              bottom: 16,
+              right: 16,
+              backgroundColor: '#7c2d12',
+              borderRadius: 24,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              borderWidth: 1,
+              borderColor: '#ea580c',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              elevation: 8,
+              zIndex: 999,
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={{ fontSize: 14 }}>🔬</Text>
+            <Text style={{ color: '#fed7aa', fontSize: 11, fontWeight: '800' }}>Logger</Text>
+          </TouchableOpacity>
         )}
 
         {/* Grace Cancellation Emergency Countdown Overlay Modal */}
@@ -1279,9 +1311,15 @@ const MainApp = () => {
             onToggleMotionGuard={handleToggleMotionGuard}
             onNavigateARView={() => setCurrentScreen('AR_VIEW')}
             onCreateSafeZone={handleCreateSafeZone}
+            onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
           />
         )}
 
+
+        {/* DEV ONLY — IMU Sensor Data Logger Screen */}
+        {__DEV__ && currentScreen === 'IMU_LOGGER' && (
+          <ImuLoggerScreen onBack={() => setCurrentScreen('DASHBOARD')} />
+        )}
 
         {currentScreen === 'AR_VIEW' && (
           <ARViewComponent
@@ -1310,6 +1348,14 @@ const MainApp = () => {
           />
         )}
       </Animated.View>
+
+      {/* Offline Vector Tile Pack Downloader Modal (Thesis Figure 5.8 / Sec 5.2.3) */}
+      <OfflinePackModal
+        visible={isOfflineModalOpen}
+        latitude={liveLocation?.latitude}
+        longitude={liveLocation?.longitude}
+        onClose={() => setIsOfflineModalOpen(false)}
+      />
     </SafeAreaView>
   );
 };

@@ -110,13 +110,18 @@ exports.unbindDevice = async (req, res) => {
 };
 
 /**
- * @desc    Update FCM Device Token for user
+ * @desc    Register or update FCM push notification token for the authenticated user and their device(s).
+ *          Called by the mobile app on login and whenever the FCM token rotates.
  * @route   POST /api/device/fcm-token
  * @access  Private
+ * @body    { fcmToken: string, deviceId?: string }
+ *          If deviceId is provided, only that specific device row is updated.
+ *          If omitted, all devices belonging to the user are updated (single-device fallback).
  */
 exports.updateFcmToken = async (req, res) => {
     try {
-        const { fcmToken } = req.body;
+        const { fcmToken, deviceId } = req.body;
+
         if (!fcmToken) {
             return res.status(400).json({
                 success: false,
@@ -124,8 +129,16 @@ exports.updateFcmToken = async (req, res) => {
             });
         }
 
+        // Always update the User-level token — used when SOS notifications are dispatched
+        // to guardians by looking up their User.fcmToken via email.
         await User.update({ fcmToken }, { where: { id: req.user.id } });
-        await Device.update({ fcmToken }, { where: { userId: req.user.id } });
+
+        // Update the specific device token if deviceId is provided, otherwise update all
+        // devices belonging to this user (safe for the common single-device scenario).
+        const deviceWhere = deviceId
+            ? { id: deviceId, userId: req.user.id }
+            : { userId: req.user.id };
+        await Device.update({ fcmToken }, { where: deviceWhere });
 
         res.status(200).json({
             success: true,
@@ -135,7 +148,7 @@ exports.updateFcmToken = async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: error.message
+            message: error.message,
         });
     }
 };

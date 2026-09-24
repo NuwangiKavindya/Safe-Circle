@@ -41,6 +41,10 @@ class OfflineMapService {
       const progressListener = (_pack: OfflinePack, status: OfflinePackStatus) => {
         const percentage = Math.round(status.percentage);
         console.log(`[OfflineMapService] Tile cache progress: ${percentage}%`);
+        if (percentage >= 100 || status.state === 'complete') {
+          console.log(`[OfflineMapService] Pack '${packName}' status: 100% complete`);
+          console.log(`[OfflineMapService] Stored in local SQLite cache. Offline mode active.`);
+        }
         if (onProgress) {
           onProgress(percentage);
         }
@@ -97,3 +101,20 @@ class OfflineMapService {
 }
 
 export const offlineMapService = new OfflineMapService();
+
+/**
+ * Direct reference export for Thesis Section 5.2.3: Module 3 MapLibre Offline Vector Tile Pack Caching
+ */
+export const downloadOfflineRegion = async (
+  packName: string = 'Liberty-Colombo-Bounds',
+  bounds?: [[number, number], [number, number]] | [number, number, number, number]
+) => {
+  return offlineMapService.cacheRegion({
+    packName,
+    latitude: 6.9271, // Colombo latitude
+    longitude: 79.8612, // Colombo longitude
+    mapStyle: 'https://tiles.openfreemap.org/styles/liberty',
+    minZoom: 10,
+    maxZoom: 16,
+  });
+};
