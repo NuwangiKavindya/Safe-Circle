@@ -1,0 +1,106 @@
+{
+  "dataset": {
+    "data_dir": "/Users/nuwangi/safecircle_dataset/safecircle_imu/",
+    "total_clips": 48,
+    "theft_clips": 23,
+    "normal_clips": 25,
+    "train_clips": 39,
+    "test_clips": 9,
+    "window_size": 100,
+    "stride": 50,
+    "channels": 3,
+    "target_hz": 50.0,
+    "total_windows": 201,
+    "train_windows": 166,
+    "test_windows": 35
+  },
+  "normalization": {
+    "mean": [
+      0.0029192413203418255,
+      3.3800392150878906,
+      9.058004379272461
+    ],
+    "std": [
+      2.094377279281616,
+      2.6760475635528564,
+      2.9341847896575928
+    ],
+    "channels": [
+      "ax",
+      "ay",
+      "az"
+    ],
+    "window_size": 100,
+    "target_hz": 50.0
+  },
+  "architecture": {
+    "type": "1D CNN",
+    "input_shape": [
+      100,
+      3
+    ],
+    "total_params": 25921
+  },
+  "training": {
+    "epochs_run": 68,
+    "max_epochs": 80,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "class_weights": {
+      "0": 0.7345132743362832,
+      "1": 1.5660377358490567
+    },
+    "augmentation": {
+      "noise_std": 0.05,
+      "time_shift_max_frames": 5,
+      "scale_range": [
+        0.9,
+        1.1
+      ]
+    },
+    "final_train_loss": 0.024737274274230003,
+    "final_val_loss": 0.11806169152259827,
+    "final_train_acc": 0.9939758777618408,
+    "final_val_acc": 0.9714285731315613
+  },
+  "evaluation": {
+    "accuracy": 0.9714285714285714,
+    "precision": 0.8888888888888888,
+    "recall": 1.0,
+    "f1_score": 0.9411764705882353,
+    "false_positive_rate": 0.037037037037037035,
+    "true_positives": 8,
+    "false_positives": 1,
+    "true_negatives": 26,
+    "false_negatives": 0,
+    "confusion_matrix": [
+      [
+        26,
+        1
+      ],
+      [
+        0,
+        8
+      ]
+    ],
+    "classification_report": "              precision    recall  f1-score   support\n\n      NORMAL       1.00      0.96      0.98        27\n       THEFT       0.89      1.00      0.94         8\n\n    accuracy                           0.97        35\n   macro avg       0.94      0.98      0.96        35\nweighted avg       0.97      0.97      0.97        35\n"
+  },
+  "tflite": {
+    "path": "/Users/nuwangi/Desktop/research/safe-circle/ml/theft_detector.tflite",
+    "size_kb": 42.3828125,
+    "quantization": "INT8 (full integer)",
+    "input_type": "int8",
+    "output_type": "float32"
+  },
+  "latency": {
+    "avg_ms": 0.01208218080656869,
+    "min_ms": 0.011750031262636185,
+    "max_ms": 0.01837499439716339,
+    "p50_ms": 0.011834083124995232,
+    "p95_ms": 0.012471445370465515,
+    "n_iterations": 35
+  },
+  "validation_strategy": "Clip-level grouped split (no temporal leakage). All windows from a clip belong to exactly one split.",
+  "limitation": "Single-participant (P01), single-device (Samsung Galaxy A05). Intra-participant discriminability only. Cross-participant generalization requires LOSO cross-validation with additional participants (identified as future work).",
+  "seed": 42
+}

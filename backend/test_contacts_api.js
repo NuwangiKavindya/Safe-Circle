@@ -34,11 +34,18 @@ async function verifyContacts() {
         console.log(`Created Trusted Contact: ${contact.contactName}`);
         console.log(`Generated Secure Access Code: ${contact.accessCode}`);
 
-        // Check format of accessCode (should be a 6-digit string)
-        if (/^\d{6}$/.test(contact.accessCode)) {
-            console.log('✅ Success: Access Code is a valid 6-digit numeric code!');
+        // Check format of accessCode (should be SC-XXXXXXXX 8-character hex handle)
+        if (/^SC-[A-F0-9]{8}$/.test(contact.accessCode)) {
+            console.log('✅ Success: Access Code is a valid SC-XXXXXXXX cryptographic handle!');
         } else {
-            throw new Error(`❌ Error: Access Code "${contact.accessCode}" is not a 6-digit numeric string.`);
+            throw new Error(`❌ Error: Access Code "${contact.accessCode}" is not a valid SC-XXXXXXXX handle.`);
+        }
+
+        // Check RFC 6238 TOTP Secret generation
+        if (contact.totpSecret && contact.totpSecret.length >= 16) {
+            console.log('✅ Success: RFC 6238 TOTP secret generated successfully!');
+        } else {
+            throw new Error('❌ Error: Missing or invalid totpSecret.');
         }
 
         // 3. Retrieve contacts for user

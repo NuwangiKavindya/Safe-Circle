@@ -38,6 +38,21 @@ jest.mock('@maplibre/maplibre-react-native', () => ({
   setAccessToken: jest.fn(),
 }));
 
+jest.mock('react-native-sensors', () => ({
+  magnetometer: {
+    subscribe: jest.fn(() => ({ unsubscribe: jest.fn() })),
+  },
+  SensorTypes: { magnetometer: 'magnetometer' },
+  setUpdateIntervalForType: jest.fn(),
+}));
+
+jest.mock('react-native-fs', () => ({
+  DocumentDirectoryPath: '/mock/path',
+  writeFile: jest.fn(() => Promise.resolve()),
+  readFile: jest.fn(() => Promise.resolve('')),
+  exists: jest.fn(() => Promise.resolve(true)),
+  mkdir: jest.fn(() => Promise.resolve()),
+}));
 
 test('renders correctly', async () => {
   await ReactTestRenderer.act(() => {

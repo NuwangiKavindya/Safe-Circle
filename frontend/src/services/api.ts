@@ -82,6 +82,7 @@ export interface ContactResponse {
   message?: string;
   data?: TrustedContact;
   delivery?: ContactDeliveryStatus;
+  totpProvisioningUri?: string;
 }
 
 export interface GuardianshipWard {
@@ -223,6 +224,7 @@ export interface ActiveAlertsResponse {
 export interface VerifyCodeResponse {
   success: boolean;
   message?: string;
+  trackerSessionToken?: string;
   data?: {
     contactName: string;
     relationship: string;
@@ -581,6 +583,8 @@ class ApiService {
       return {
         success: true,
         data: data.data,
+        delivery: data.delivery,
+        totpProvisioningUri: data.totpProvisioningUri,
       };
     } catch (error: any) {
       return {
@@ -794,16 +798,19 @@ class ApiService {
   }
 
   /**
-   * Verify contact 6-digit access code
+   * Verify contact using RFC 6238 TOTP two-field protocol.
+   *
+   * @param accessCode  - Stable contact handle (e.g. "SC-A3F2B1C9"), shared once in invitation.
+   * @param totpToken   - Rotating 6-digit TOTP from Google Authenticator / Authy. Valid 30s.
    */
-  async verifyAccessCode(accessCode: string): Promise<VerifyCodeResponse> {
+  async verifyAccessCode(accessCode: string, totpToken: string): Promise<VerifyCodeResponse> {
     try {
       const response = await fetch(`${API_BASE_URL}/api/contacts/shared/verify`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ accessCode }),
+        body: JSON.stringify({ accessCode, totpToken }),
       });
 
       const data = await response.json();
@@ -811,6 +818,40 @@ class ApiService {
         return {
           success: false,
           message: data.message || 'Verification failed',
+        };
+      }
+
+      return {
+        success: true,
+        trackerSessionToken: data.trackerSessionToken,
+        data: data.data,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: error.message || 'Network error occurred',
+      };
+    }
+  }
+
+  /**
+   * Get current session status and active SOS state using Tracker Session JWT (for polling)
+   */
+  async getTrackerSessionStatus(trackerSessionToken: string): Promise<VerifyCodeResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/contacts/shared/status`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${trackerSessionToken}`,
+        },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return {
+          success: false,
+          message: data.message || 'Failed to poll tracker status',
         };
       }
 
@@ -827,12 +868,18 @@ class ApiService {
   }
 
   /**
-   * Get shared distress tracking location history logs using access code
+   * Get shared distress tracking location history logs using access code and tracker session JWT
    */
-  async getSharedLocationHistory(accessCode: string): Promise<SharedLocationHistoryResponse> {
+  async getSharedLocationHistory(accessCode: string, trackerSessionToken?: string): Promise<SharedLocationHistoryResponse> {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/contacts/shared/shared/${accessCode}`, {
+      const headers: Record<string, string> = {};
+      if (trackerSessionToken) {
+        headers['Authorization'] = `Bearer ${trackerSessionToken}`;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/contacts/shared/location/${accessCode}`, {
         method: 'GET',
+        headers,
       });
 
       const data = await response.json();

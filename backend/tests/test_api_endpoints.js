@@ -5,10 +5,9 @@
  * Usage:
  *   node backend/tests/test_api_endpoints.js
  *   node backend/tests/test_api_endpoints.js http://localhost:5001
- *   node backend/tests/test_api_endpoints.js http://35.154.31.80
  */
 
-const BASE_URL = process.argv[2] || process.env.API_BASE_URL || 'http://35.154.31.80';
+const BASE_URL = process.argv[2] || process.env.API_BASE_URL || 'http://localhost:5001';
 
 console.log(`\n======================================================`);
 console.log(`🛡️  SafeCircle API Endpoint Verification Suite`);
@@ -20,6 +19,8 @@ let testUserId = null;
 let testDeviceId = null;
 let testContactId = null;
 let testAccessCode = null;
+let totpProvisioningUri = null;
+let trackerSessionToken = null;
 let testAlertId = null;
 let testSafeZoneId = null;
 
@@ -53,6 +54,7 @@ async function request(path, options = {}) {
   const url = `${BASE_URL}${path}`;
   const headers = {
     'Content-Type': 'application/json',
+    'x-test-bypass': 'skip-limiter',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
@@ -95,7 +97,7 @@ async function main() {
       body: JSON.stringify({ email: testUser.email, password: testUser.password }),
     });
     if (!ok || !data?.token) throw new Error(data?.message || `HTTP ${status}`);
-    token = data.token; // refresh token
+    token = data.token;
     return `Logged in successfully as ${testUser.email}`;
   });
 
@@ -108,7 +110,6 @@ async function main() {
     if (ok && data?.token) {
       return `Dev Sandbox active: User ID ${data.data?.id}`;
     }
-    // In production environments (NODE_ENV=production), sandbox tokens are strictly rejected for security
     if (status === 401) {
       return `Sandbox disabled in production (Security constraint verified: HTTP 401)`;
     }
@@ -155,6 +156,7 @@ async function main() {
     }
     testContactId = data.data.id;
     testAccessCode = data.data.accessCode;
+    totpProvisioningUri = data.totpProvisioningUri;
     return `Created Contact ID: ${testContactId} (Route: ${data.delivery.deliveryChannel}, Code: ${testAccessCode})`;
   });
 
@@ -268,21 +270,39 @@ async function main() {
     return `Active alerts count: ${data.data.length}`;
   });
 
-  // 15. Verify Contact Access Code (Portal)
-  await runStep('Verify Contact Access Code (POST /api/contacts/shared/verify)', async () => {
+  // 15. Verify Contact Access Code + TOTP (Issues Session JWT)
+  await runStep('Verify Contact Access Code + TOTP (POST /api/contacts/shared/verify)', async () => {
+    const match = totpProvisioningUri?.match(/secret=([A-Z0-9]+)/i);
+    const secret = match ? match[1] : null;
+    if (!secret) throw new Error('Could not find TOTP secret in provisioning URI');
+    const { generateToken } = require('../utils/totp');
+    const totpToken = await generateToken(secret);
+
     const { status, ok, data } = await request('/api/contacts/shared/verify', {
       method: 'POST',
-      body: JSON.stringify({ accessCode: testAccessCode }),
+      body: JSON.stringify({ accessCode: testAccessCode, totpToken }),
     });
-    if (!ok || !data?.data?.targetUser) throw new Error(data?.message || `HTTP ${status}`);
-    return `Access Code Verified! User: ${data.data.targetUser.fullName}, Mode: ${data.data.sharingMode}`;
+    if (!ok || !data?.trackerSessionToken) throw new Error(data?.message || `HTTP ${status}`);
+    trackerSessionToken = data.trackerSessionToken;
+    return `Access Code Verified! Session JWT issued for: ${data.data?.targetUser?.fullName}, Mode: ${data.data?.sharingMode}`;
   });
 
-  // 16. Get Shared Tracking History (Portal)
-  await runStep('Get Shared Location Stream (GET /api/contacts/shared/shared/:code)', async () => {
-    const { status, ok, data } = await request(`/api/contacts/shared/shared/${testAccessCode}`);
+  // 16. Get Shared Tracking History (Authenticated via Tracker Session JWT)
+  await runStep('Get Shared Location Stream (GET /api/contacts/shared/:code)', async () => {
+    const { status, ok, data } = await request(`/api/contacts/shared/${testAccessCode}`, {
+      headers: { Authorization: `Bearer ${trackerSessionToken}` },
+    });
     if (!ok || !Array.isArray(data?.data)) throw new Error(data?.message || `HTTP ${status}`);
-    return `Retrieved ${data.data.length} shared location breadcrumb(s)`;
+    return `Retrieved ${data.data.length} shared location breadcrumb(s) using Session JWT`;
+  });
+
+  // 16b. Security Auth Check: Reject Location Stream without Session JWT
+  await runStep('Auth Check: Location Stream without Session JWT (GET /api/contacts/shared/:code)', async () => {
+    const { status } = await request(`/api/contacts/shared/${testAccessCode}`, {
+      headers: { Authorization: '' },
+    });
+    if (status !== 401) throw new Error(`Expected 401 Unauthorized, got HTTP ${status}`);
+    return `Access correctly denied without Session JWT (HTTP 401)`;
   });
 
   // 17. Resolve Emergency Alert

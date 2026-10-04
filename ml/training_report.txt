@@ -1,0 +1,46 @@
+SafeCircle Theft Detector — Training Report
+============================================================
+
+Date: 2026-09-29 21:16:55
+Seed: 42
+
+Dataset: 48 clips (23 THEFT, 25 NORMAL)
+Train: 39 clips → 166 windows
+Test:  9 clips → 35 windows
+Validation: Clip-level grouped split (no leakage)
+
+Model: 1D CNN, 25921 params
+Input: (100, 3) = 2s × [ax, ay, az]
+
+Epochs trained: 68/80
+Final train acc: 0.9940
+Final val acc:   0.9714
+
+--- Test Set Metrics ---
+Accuracy:         0.9714
+Precision:        0.8889
+Recall (TPR):     1.0000
+F1 Score:         0.9412
+False Alarm Rate: 0.0370
+
+Confusion Matrix:
+                Predicted
+              NORMAL  THEFT
+Actual NORMAL     26      1
+Actual THEFT       0      8
+
+              precision    recall  f1-score   support
+
+      NORMAL       1.00      0.96      0.98        27
+       THEFT       0.89      1.00      0.94         8
+
+    accuracy                           0.97        35
+   macro avg       0.94      0.98      0.96        35
+weighted avg       0.97      0.97      0.97        35
+
+TFLite model: 42.4 KB (INT8 quantized)
+Avg latency:  0.01 ms (host CPU)
+
+LIMITATION: Single-participant (P01), single-device (Galaxy A05).
+Reported metrics reflect intra-participant discriminability only.
+Cross-participant generalization requires LOSO cross-validation.

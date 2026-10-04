@@ -18,6 +18,7 @@ export interface ThemePalette {
   accentRed: string;
   accentRedDark: string;
   accentRedBg: string;
+  accentOrange: string;
   indigoBg: string;
   indigoBorder: string;
   indigoText: string;
@@ -56,6 +57,7 @@ export const THEME_PALETTES: { dark: ThemePalette; light: ThemePalette } = {
     accentRed: '#EF4444',
     accentRedDark: '#991B1B',
     accentRedBg: '#7F1D1D',
+    accentOrange: '#F59E0B',
     indigoBg: '#312E81',
     indigoBorder: '#4F46E5',
     indigoText: '#C7D2FE',
@@ -91,6 +93,7 @@ export const THEME_PALETTES: { dark: ThemePalette; light: ThemePalette } = {
     accentRed: '#DC2626',
     accentRedDark: '#991B1B',
     accentRedBg: '#FEE2E2',
+    accentOrange: '#D97706',
     indigoBg: '#E0E7FF',
     indigoBorder: '#6366F1',
     indigoText: '#3730A3',

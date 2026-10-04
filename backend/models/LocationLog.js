@@ -44,7 +44,16 @@ const LocationLog = sequelize.define('LocationLog', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    // FIX: Composite index on (deviceId, timestamp) to prevent full-table scans
+    // when querying a device's location history. Without this index, history
+    // queries degrade to O(n) scans as the LocationLog table grows unboundedly.
+    indexes: [
+        {
+            name: 'location_logs_device_timestamp_idx',
+            fields: ['deviceId', 'timestamp'],
+        }
+    ]
 });
 
 // Setup relationships

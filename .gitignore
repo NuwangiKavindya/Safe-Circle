@@ -102,6 +102,9 @@ crash.*.log
 !terraform.tfvars.example
 override.tf
 override.tf.json
-*_override.tf
-*_override.tf.json
+# Python / ML Virtual Environments
+venv/
+ml/venv/
+__pycache__/
+*.pyc
 

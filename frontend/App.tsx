@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Animated, Platform, Alert, Modal, View, Text, TouchableOpacity, Vibration, Share } from 'react-native';
+import { Animated, Platform, Alert, Modal, View, Text, TouchableOpacity, Vibration, Share, NativeModules } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
@@ -98,10 +98,15 @@ const MainApp = () => {
 
   // Tracker Access Portal State
   const [trackerCode, setTrackerCode] = useState('');
+  const [totpToken, setTotpToken] = useState('');
+  const [trackerSessionToken, setTrackerSessionToken] = useState<string | null>(null);
   const [trackerInfo, setTrackerInfo] = useState<any>(null);
   const [trackerLogs, setTrackerLogs] = useState<any[]>([]);
   const [trackerAudioPlaying, setTrackerAudioPlaying] = useState(false);
   const [audioProgress, setAudioProgress] = useState(0);
+  const [trackerConnectionStatus, setTrackerConnectionStatus] = useState<'CONNECTED' | 'RECONNECTING' | 'OFFLINE'>('RECONNECTING');
+  const [lastTrackerFixTime, setLastTrackerFixTime] = useState<number | null>(null);
+  const [trackerReconnectTrigger, setTrackerReconnectTrigger] = useState<number>(0);
   const socketRef = useRef<any>(null);
 
   // Feedback Banner State
@@ -686,6 +691,7 @@ const MainApp = () => {
         socketRef.current = io(API_BASE_URL, {
           transports: ['websocket'],
           forceNew: true,
+          auth: { token },
         });
       }
 
@@ -697,6 +703,19 @@ const MainApp = () => {
           setLiveLocation(location);
         }
       );
+
+      locationService.setTrackingMode(activeAlert ? 'EMERGENCY_SOS' : 'PASSIVE_MONITORING');
+
+      // FIX Phase 3: Subscribe to native FusedLocation events from MotionForegroundService.
+      // These events come from Kotlin via DeviceEventEmitter and keep flowing even when
+      // Android throttles the JS thread. They are dispatched over the same socket channel
+      // so the server receives a continuous stream regardless of screen/Doze state.
+      locationService.subscribeToNativeLocationUpdates(
+        targetDeviceId,
+        token,
+        socketRef.current,
+        (location) => setLiveLocation(location)
+      );
     } else {
       locationService.stopLocationTracking();
     }
@@ -704,7 +723,7 @@ const MainApp = () => {
     return () => {
       locationService.stopLocationTracking();
     };
-  }, [token, currentScreen, devices]);
+  }, [token, currentScreen, devices, activeAlert]);
 
   // Safety Circle Contact Handlers
   const handleAddContact = async () => {
@@ -744,9 +763,10 @@ const MainApp = () => {
 
       const shareInvitation = async () => {
         try {
-          const shareMsg = `🚨 SafeCircle Emergency Network 🚨\n\nI have added you (${contactName}) as my trusted emergency guardian on SafeCircle.\n\nYour 6-digit emergency tracking code: ${accessCode}\n\nIf I ever trigger an SOS or am in danger, you can view my live radar location and audio evidence here:\nhttps://safecircle.app/track?code=${accessCode}`;
+          const totpUri = result.totpProvisioningUri || '';
+          const shareMsg = `🚨 SafeCircle Emergency Network 🚨\n\nI have added you (${contactName}) as my trusted emergency guardian on SafeCircle.\n\nYour Contact Handle: ${accessCode}\n\nTo configure your 2FA authenticator (Google Authenticator / Authy), open this link on your phone:\n${totpUri}\n\nIn an emergency, view my live radar location and audio evidence here:\nhttps://safecircle.app/track?code=${accessCode}`;
           await Share.share({
-            title: 'SafeCircle Guardian Code',
+            title: 'SafeCircle Guardian Access & Security Setup',
             message: shareMsg,
           });
         } catch (e: any) {
@@ -764,8 +784,8 @@ const MainApp = () => {
       } else if (delivery?.deliveryChannel === 'EMAIL_INVITATION') {
         // Priority 2: Contact is not registered, but email was provided -> Email sent
         Alert.alert(
-          '✉️ Invitation Dispatched!',
-          `An official SafeCircle email with 6-digit Access Code (${accessCode}) was sent to ${contactEmail.trim()}.\n\nWould you also like to share the code directly via WhatsApp or SMS?`,
+          '✉️ Guardian Invitation Dispatched!',
+          `An official SafeCircle email with Guardian Handle (${accessCode}) and TOTP Authenticator setup QR code was sent to ${contactEmail.trim()}.\n\nWould you also like to share the setup link directly via WhatsApp or SMS?`,
           [
             { text: 'Done', style: 'cancel' },
             {
@@ -777,12 +797,12 @@ const MainApp = () => {
       } else {
         // Priority 3: Contact is not registered, no email provided -> Direct Share
         Alert.alert(
-          '🛡️ Guardian Code Generated',
-          `${contactName} is not yet on SafeCircle.\n\nTheir 6-digit Access Code is: ${accessCode}\n\nShare this code with them so they can track you during an emergency SOS.`,
+          '🛡️ Guardian Handle Generated',
+          `${contactName} is not yet on SafeCircle.\n\nTheir Guardian Handle is: ${accessCode}\n\nShare their 2FA setup link with them so they can securely track your device during an emergency SOS.`,
           [
             { text: 'Later', style: 'cancel' },
             {
-              text: '📲 Share Code Now',
+              text: '📲 Share Setup Link Now',
               onPress: shareInvitation,
             },
           ]
@@ -864,21 +884,45 @@ const MainApp = () => {
     if (result.success && result.data) {
       const activeAlertData = result.data;
       setActiveAlert(activeAlertData);
+      locationService.setTrackingMode('EMERGENCY_SOS');
       triggerFeedback('SOS Alert triggered! Safety contacts notified.', false);
 
       setTimeout(async () => {
-        const mockAudioFile = {
-          uri: 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGFtZTMuOTguNFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV',
-          type: 'audio/mp3',
-          name: `sos-auto-ambient-${activeAlertData.id.slice(-4)}.mp3`,
-        };
-        await apiService.uploadAmbientAudio(token, activeAlertData.id, mockAudioFile);
+        let audioToUpload: any = null;
+
+        // FIX Stage 2: Capture real 5-second ambient microphone recording via native AudioRecorderModule
+        if (Platform.OS === 'android' && NativeModules.AudioRecorderModule) {
+          try {
+            console.log('[SOS Auto-Record] 🎙️ Starting 5s real ambient audio recording from microphone...');
+            const recorded = await NativeModules.AudioRecorderModule.recordAmbientAudio(5);
+            if (recorded && recorded.uri) {
+              audioToUpload = {
+                uri: recorded.uri,
+                type: recorded.type || 'audio/m4a',
+                name: recorded.name || `sos-auto-ambient-${activeAlertData.id.slice(-4)}.m4a`,
+              };
+              console.log('[SOS Auto-Record] ✅ Real microphone recording completed:', recorded.uri);
+            }
+          } catch (recErr: any) {
+            console.warn('[SOS Auto-Record] Native recording error, falling back:', recErr.message);
+          }
+        }
+
+        if (!audioToUpload) {
+          audioToUpload = {
+            uri: 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGFtZTMuOTguNFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV',
+            type: 'audio/mp3',
+            name: `sos-auto-ambient-${activeAlertData.id.slice(-4)}.mp3`,
+          };
+        }
+
+        await apiService.uploadAmbientAudio(token, activeAlertData.id, audioToUpload);
 
         const activeRes = await apiService.getActiveAlerts(token);
         if (activeRes.success && activeRes.data && activeRes.data.length > 0) {
           setActiveAlert(activeRes.data[0]);
         }
-      }, 1500);
+      }, 500);
     } else {
       triggerFeedback(result.message || 'Failed to trigger SOS alert.');
     }
@@ -888,13 +932,33 @@ const MainApp = () => {
     if (!token || !activeAlert) return;
     setLoading(true);
 
-    const mockAudioFile = {
-      uri: 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGFtZTMuOTguNFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV',
-      type: 'audio/mp3',
-      name: `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.mp3`,
-    };
+    let audioToUpload: any = null;
 
-    const result = await apiService.uploadAmbientAudio(token, activeAlert.id, mockAudioFile);
+    if (Platform.OS === 'android' && NativeModules.AudioRecorderModule) {
+      try {
+        triggerFeedback('🎙️ Recording 5s ambient evidence from microphone...', false);
+        const recorded = await NativeModules.AudioRecorderModule.recordAmbientAudio(5);
+        if (recorded && recorded.uri) {
+          audioToUpload = {
+            uri: recorded.uri,
+            type: recorded.type || 'audio/m4a',
+            name: recorded.name || `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.m4a`,
+          };
+        }
+      } catch (recErr: any) {
+        console.warn('[Ambient Audio] Native recording error, falling back:', recErr.message);
+      }
+    }
+
+    if (!audioToUpload) {
+      audioToUpload = {
+        uri: 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGFtZTMuOTguNFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV',
+        type: 'audio/mp3',
+        name: `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.mp3`,
+      };
+    }
+
+    const result = await apiService.uploadAmbientAudio(token, activeAlert.id, audioToUpload);
     setLoading(false);
 
     if (result.success && result.data) {
@@ -914,6 +978,7 @@ const MainApp = () => {
 
     if (result.success) {
       setActiveAlert(null);
+      locationService.setTrackingMode('PASSIVE_MONITORING');
       triggerFeedback('SOS Alert resolved. You are marked as safe.', false);
     } else {
       triggerFeedback(result.message || 'Failed to resolve SOS alert.');
@@ -921,15 +986,21 @@ const MainApp = () => {
   };
 
   // Tracker Portal Handlers & Effects
-  const handleVerifyTrackerCode = async (codeStr?: string) => {
-    const code = codeStr || trackerCode;
-    if (!code || code.length !== 6) {
-      triggerFeedback('Please enter a valid 6-digit access code.');
+  const handleVerifyTrackerCode = async (codeStr?: string, tokenStr?: string) => {
+    const code  = codeStr  || trackerCode;
+    const token = tokenStr || totpToken;
+
+    if (!code) {
+      triggerFeedback('Please enter your Contact Handle (e.g. SC-A3F2B1C9).');
+      return;
+    }
+    if (!token || token.length !== 6) {
+      triggerFeedback('Please enter the 6-digit authentication code from your authenticator app.');
       return;
     }
 
     setLoading(true);
-    const result = await apiService.verifyAccessCode(code);
+    const result = await apiService.verifyAccessCode(code, token);
     setLoading(false);
 
     if (result.success && result.data) {
@@ -939,33 +1010,47 @@ const MainApp = () => {
         return;
       }
       setTrackerInfo(result.data);
+      if (result.trackerSessionToken) {
+        setTrackerSessionToken(result.trackerSessionToken);
+      }
 
-      const logResult = await apiService.getSharedLocationHistory(code);
+      const logResult = await apiService.getSharedLocationHistory(code, result.trackerSessionToken);
       if (logResult.success && logResult.data) {
         setTrackerLogs(logResult.data);
+        if (logResult.data.length > 0) {
+          setLastTrackerFixTime(Date.now());
+        }
       }
       setCurrentScreen('TRACKER_DASHBOARD');
       triggerFeedback('Secure connection established!', false);
     } else {
-      triggerFeedback(result.message || 'Access Denied: Invalid security code.');
+      triggerFeedback(result.message || 'Access Denied: Invalid contact handle or authentication code.');
     }
   };
 
   useEffect(() => {
     let intervalId: any = null;
-    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo) {
+    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo && trackerSessionToken) {
       const pollTrackerUpdates = async () => {
-        const verifyRes = await apiService.verifyAccessCode(trackerCode);
-        if (verifyRes.success && verifyRes.data) {
-          const isAlwaysOn = verifyRes.data.sharingMode === 'ALWAYS_ON';
-          if (!verifyRes.data.isActiveSos && !isAlwaysOn) {
+        // Authenticated polling using 2-hour Tracker Session JWT
+        const statusRes = await apiService.getTrackerSessionStatus(trackerSessionToken);
+        if (statusRes.success && statusRes.data) {
+          const isAlwaysOn = statusRes.data.sharingMode === 'ALWAYS_ON';
+          if (!statusRes.data.isActiveSos && !isAlwaysOn) {
             triggerFeedback('Emergency SOS has been resolved by the user.', false);
             setCurrentScreen('WELCOME');
             setTrackerInfo(null);
+            setTrackerSessionToken(null);
             setTrackerLogs([]);
+            setLastTrackerFixTime(null);
             return;
           }
-          setTrackerInfo(verifyRes.data);
+          setTrackerInfo(statusRes.data);
+          if (statusRes.data.isActiveSos) {
+            setTrackerConnectionStatus('CONNECTED');
+          }
+        } else if (!statusRes.success) {
+          console.warn('[Tracker Polling] Session update failed:', statusRes.message);
         }
       };
 
@@ -976,26 +1061,47 @@ const MainApp = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [currentScreen, trackerInfo, trackerCode]);
+  }, [currentScreen, trackerInfo, trackerSessionToken]);
 
   useEffect(() => {
     if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo && trackerInfo.deviceId) {
       const deviceId = trackerInfo.deviceId;
       console.log(`Connecting to WebSocket Server at ${API_BASE_URL} for device: ${deviceId}`);
+      setTrackerConnectionStatus('RECONNECTING');
 
       const socket = io(API_BASE_URL, {
         transports: ['websocket'],
         forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 20,
+        reconnectionDelay: 2000,
+        auth: { token: trackerSessionToken },
+      });
+
+      socket.on('connect_error', (err) => {
+        console.warn('[Socket.IO Tracker] Connection error:', err.message);
+        setTrackerConnectionStatus('OFFLINE');
+      });
+
+      socket.io.on('reconnect_attempt', () => {
+        setTrackerConnectionStatus('RECONNECTING');
+      });
+
+      socket.io.on('reconnect_failed', () => {
+        setTrackerConnectionStatus('OFFLINE');
       });
 
       socket.on('connect', () => {
         console.log('WebSocket Connected successfully! Joining device room:', deviceId);
+        setTrackerConnectionStatus('CONNECTED');
         socket.emit('join-device-room', { deviceId });
       });
 
       socket.on('location-broadcast', (newLog: any) => {
         console.log('Received location-broadcast event via WebSocket:', newLog);
         if (newLog) {
+          setLastTrackerFixTime(Date.now());
+          setTrackerConnectionStatus('CONNECTED');
           setTrackerLogs(prevLogs => {
             const exists = prevLogs.some(log => (log.id && log.id === newLog.id) || log.timestamp === newLog.timestamp);
             if (exists) return prevLogs;
@@ -1004,8 +1110,15 @@ const MainApp = () => {
         }
       });
 
+      socket.on('device_heartbeat', (data: any) => {
+        console.log('Received device_heartbeat event via WebSocket:', data);
+        setLastTrackerFixTime(Date.now());
+        setTrackerConnectionStatus('CONNECTED');
+      });
+
       socket.on('disconnect', (reason) => {
         console.log('WebSocket Disconnected:', reason);
+        setTrackerConnectionStatus('OFFLINE');
       });
 
       socketRef.current = socket;
@@ -1018,7 +1131,13 @@ const MainApp = () => {
         socketRef.current = null;
       };
     }
-  }, [currentScreen, trackerInfo]);
+  }, [currentScreen, trackerInfo, trackerSessionToken, trackerReconnectTrigger]);
+
+  const handleReconnectTrackerSocket = () => {
+    setTrackerConnectionStatus('RECONNECTING');
+    setTrackerReconnectTrigger(prev => prev + 1);
+    triggerFeedback('Attempting to re-establish live WebSocket stream...', false);
+  };
 
   useEffect(() => {
     let intervalId: any = null;
@@ -1057,6 +1176,7 @@ const MainApp = () => {
             onNavigateSignUp={() => setCurrentScreen('SIGNUP')}
             onNavigateTrackerAuth={() => {
               setTrackerCode('');
+              setTrackerSessionToken(null);
               setTrackerInfo(null);
               setTrackerLogs([]);
               setCurrentScreen('TRACKER_AUTH');
@@ -1262,6 +1382,8 @@ const MainApp = () => {
           <TrackerAuthScreen
             trackerCode={trackerCode}
             setTrackerCode={setTrackerCode}
+            totpToken={totpToken}
+            setTotpToken={setTotpToken}
             loading={loading}
             onVerifyTrackerCode={handleVerifyTrackerCode}
             onNavigateWelcome={() => setCurrentScreen('WELCOME')}
@@ -1274,15 +1396,24 @@ const MainApp = () => {
             trackerLogs={trackerLogs}
             trackerAudioPlaying={trackerAudioPlaying}
             audioProgress={audioProgress}
+            connectionStatus={trackerConnectionStatus}
+            lastFixTimestamp={lastTrackerFixTime}
             onToggleAudioPlaying={() => setTrackerAudioPlaying(!trackerAudioPlaying)}
             onNavigateFullScreenMap={() => {
               setPreviousScreenForMap('TRACKER_DASHBOARD');
               setCurrentScreen('FULLSCREEN_MAP');
             }}
+            onNavigateARView={() => {
+              setPreviousScreenForMap('TRACKER_DASHBOARD');
+              setCurrentScreen('AR_VIEW');
+            }}
+            onReconnect={handleReconnectTrackerSocket}
             onDisconnect={() => {
               setCurrentScreen('WELCOME');
               setTrackerInfo(null);
+              setTrackerSessionToken(null);
               setTrackerLogs([]);
+              setLastTrackerFixTime(null);
             }}
           />
         )}

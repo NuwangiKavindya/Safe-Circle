@@ -5,6 +5,7 @@ const Alert = require('../models/Alert');
 const Device = require('../models/Device');
 const pushService = require('../services/pushService');
 const emailService = require('../services/emailService');
+const { generateURI } = require('../utils/totp');
 
 /**
  * @desc    Add a trusted contact with intelligent channel prioritization
@@ -23,7 +24,7 @@ exports.addContact = async (req, res) => {
             });
         }
 
-        // 1. Create contact (the beforeCreate hook automatically sets the unique 6-digit accessCode)
+        // 1. Create contact (beforeCreate hook generates accessCode handle + totpSecret)
         const contact = await TrustedContact.create({
             userId: req.user.id,
             contactName,
@@ -33,7 +34,13 @@ exports.addContact = async (req, res) => {
             isVerified: false
         });
 
-        // 2. Intelligent Channel Prioritization: Check if contact is an existing SafeCircle member
+        // 2. Build TOTP provisioning URI for the trusted contact's authenticator app.
+        //    Format: otpauth://totp/<label>?secret=<base32>&issuer=SafeCircle&algorithm=SHA1&digits=6&period=30
+        //    The contact scans this as a QR code into Google Authenticator / Authy.
+        //    The raw totpSecret is NOT included in this response for security.
+        const totpProvisioningUri = generateURI(contactName, contact.totpSecret, 'SafeCircle');
+
+        // 3. Intelligent Channel Prioritization: Check if contact is an existing SafeCircle member
         const cleanPhone = contactPhone.replace(/[\s\-\(\)]/g, '');
         const phoneVariants = [cleanPhone];
         if (cleanPhone.startsWith('+')) {
@@ -65,7 +72,6 @@ exports.addContact = async (req, res) => {
         };
 
         if (registeredUser) {
-            // Priority 1: In-App Push Notification (Contact already has SafeCircle)
             delivery.isRegisteredUser = true;
             delivery.deliveryChannel = 'PUSH_NOTIFICATION';
             delivery.message = `${registeredUser.fullName || contactName} is already on SafeCircle. In-app notification sent.`;
@@ -82,7 +88,6 @@ exports.addContact = async (req, res) => {
                 relationship: relationship || 'Guardian'
             });
         } else if (contactEmail && contactEmail.trim()) {
-            // Priority 2: Automated Email Invitation (New / Unregistered user with email)
             delivery.isRegisteredUser = false;
             delivery.deliveryChannel = 'EMAIL_INVITATION';
             delivery.message = `Invitation email with access code dispatched to ${contactEmail.trim()}.`;
@@ -93,18 +98,35 @@ exports.addContact = async (req, res) => {
                 senderName: req.user.fullName || 'SafeCircle User',
                 senderPhone: req.user.phoneNumber,
                 accessCode: contact.accessCode,
-                relationship: relationship || 'Guardian'
+                relationship: relationship || 'Guardian',
+                totpProvisioningUri,
+                totpSecret: contact.totpSecret
             });
         } else {
-            // Priority 3: Native Share Sheet (New / Unregistered user without email)
             delivery.isRegisteredUser = false;
             delivery.deliveryChannel = 'MANUAL_SHARE';
             delivery.message = `${contactName} is not on SafeCircle. Share access code via WhatsApp or SMS.`;
         }
 
+        // Return contact data (totpSecret excluded) + provisioning URI for QR code generation
+        const safeContact = {
+            id: contact.id,
+            userId: contact.userId,
+            contactName: contact.contactName,
+            contactPhone: contact.contactPhone,
+            contactEmail: contact.contactEmail,
+            relationship: contact.relationship,
+            isVerified: contact.isVerified,
+            accessCode: contact.accessCode,
+            sharingMode: contact.sharingMode,
+            createdAt: contact.createdAt,
+            updatedAt: contact.updatedAt,
+        };
+
         res.status(201).json({
             success: true,
-            data: contact,
+            data: safeContact,
+            totpProvisioningUri,   // For QR code generation in the frontend
             delivery
         });
     } catch (error) {

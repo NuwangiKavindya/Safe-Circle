@@ -16,6 +16,8 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           add(MotionGuardPackage())
           add(AlarmSoundPackage())
+          add(AudioRecorderPackage())
+          add(TorchPackage())
         },
     )
   }

@@ -105,11 +105,33 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+
+    aaptOptions {
+        noCompress "tflite"
+    }
 }
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // FIX Phase 3: FusedLocationProviderClient — binds background GPS to the
+    // native MotionForegroundService so location continues even when the JS
+    // thread is throttled or paused by Android on API 29+ devices.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
+    // Stage 2: On-device TFLite neural inference (used by MotionForegroundService
+    // and MotionGuardModule.runTFLiteInference).
+    //
+    // react-native-fast-tflite 3.x bundles com.google.ai.edge.litert:litert:1.4.0.
+    // The old org.tensorflow:tensorflow-lite:2.16.1 + litert ship the same classes
+    // under different Maven coordinates, which causes a duplicate-class build error.
+    //
+    // Fix: switch to the LiteRT coordinates at the same version fast-tflite declares.
+    // LiteRT 1.4.0 is a drop-in replacement — it still exports org.tensorflow.lite.*
+    // so MotionGuardModule.kt and MotionForegroundService.kt compile unchanged.
+    implementation("com.google.ai.edge.litert:litert:1.4.0")
+    implementation("com.google.ai.edge.litert:litert-support:1.4.0")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

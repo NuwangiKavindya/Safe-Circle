@@ -89,7 +89,7 @@ async function runPerformanceBenchmarks() {
       const res = await httpRequest({
         path: '/api/auth/register',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-test-bypass': 'skip-limiter' },
       }, {
         fullName: `Benchmark User ${i}`,
         email,
@@ -119,7 +119,7 @@ async function runPerformanceBenchmarks() {
         const res = await httpRequest({
           path: '/api/device',
           method: 'GET',
-          headers: { 'Authorization': `Bearer ${userToken}` },
+          headers: { 'Authorization': `Bearer ${userToken}`, 'x-test-bypass': 'skip-limiter' },
         });
         if (res.statusCode === 200) {
           protectedLatencies.push(res.durationMs);
@@ -138,6 +138,7 @@ async function runPerformanceBenchmarks() {
       const socketClient = io(BASE_URL, {
         transports: ['websocket'],
         forceNew: true,
+        auth: { token: userToken },
       });
 
       await new Promise((resolve) => {

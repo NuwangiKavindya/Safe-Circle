@@ -7,7 +7,7 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest",
+    "test": "jest --no-watchman",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -17,8 +17,10 @@
     "@react-native/new-app-screen": "0.85.0",
     "react": "19.2.3",
     "react-native": "0.85.0",
+    "react-native-fast-tflite": "^3.0.1",
     "react-native-fs": "^2.20.0",
     "react-native-geolocation-service": "^5.3.1",
+    "react-native-nitro-modules": "^0.37.1",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-sensors": "^7.3.6",
     "socket.io-client": "^4.8.3"

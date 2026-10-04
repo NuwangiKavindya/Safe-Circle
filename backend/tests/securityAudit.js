@@ -13,7 +13,11 @@ const BASE_URL = process.env.TEST_BASE_URL || 'http://127.0.0.1:5001';
 // Helper function to make HTTP requests
 function httpRequest(options, postData = null) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ hostname: '127.0.0.1', port: 5001, ...options }, (res) => {
+    const headers = {
+      'x-test-bypass': 'skip-limiter',
+      ...(options.headers || {})
+    };
+    const req = http.request({ hostname: '127.0.0.1', port: 5001, ...options, headers }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
@@ -251,25 +255,33 @@ async function runSecurityAudit() {
     });
 
     let accessCode = null;
+    let totpSecret = null;
     if (addContactRes.statusCode === 201 && addContactRes.body.data) {
       accessCode = addContactRes.body.data.accessCode;
+      if (addContactRes.body.totpProvisioningUri) {
+        const match = addContactRes.body.totpProvisioningUri.match(/secret=([A-Z0-9]+)/i);
+        if (match) totpSecret = match[1];
+      }
       recordTest('SEC-TOTP-01', 'OWASP M4 (Access Delegation)', 'Generate 6-Digit Cryptographic TOTP Code', '201 Created (6-digit code)', `Access Code: ${accessCode}`, true, 'TOTP code generated with 300s expiration window.');
     }
 
-    // 5.2 Verify Valid Access Code
-    if (accessCode) {
+    // 5.2 Verify Valid Access Code + TOTP Token
+    if (accessCode && totpSecret) {
+      const { generateToken } = require('../utils/totp');
+      const totpToken = await generateToken(totpSecret);
       const verifyRes = await httpRequest({
         port: 5001,
         path: '/api/contacts/shared/verify',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      }, { accessCode });
-      const passedVerify = verifyRes.statusCode === 200 && verifyRes.body.success === true;
+        headers: { 'Content-Type': 'application/json', 'x-test-bypass': 'skip-limiter' },
+      }, { accessCode, totpToken });
+      const token = verifyRes.body.trackerSessionToken || verifyRes.body.data?.sessionToken;
+      const passedVerify = verifyRes.statusCode === 200 && verifyRes.body.success === true && !!token;
       recordTest(
         'SEC-TOTP-02',
         'OWASP M4 (Access Delegation)',
         'Verify Valid TOTP Access Code',
-        '200 OK + Valid Payload',
+        '200 OK + Tracker Session Token',
         `Status ${verifyRes.statusCode}`,
         passedVerify,
         'Trusted contacts can authenticate using active TOTP code.'

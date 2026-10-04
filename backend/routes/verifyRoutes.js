@@ -2,9 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { verifyAccessCode, getSharedLocationHistory } = require('../controllers/verifyController');
+const { verifyAccessCode, getTrackerSessionStatus, getSharedLocationHistory } = require('../controllers/verifyController');
 const { uploadAmbientAudio } = require('../controllers/alertController');
-const { protect } = require('../middleware/auth');
+const { protect, protectTracker } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -39,11 +39,22 @@ const upload = multer({
     }
 });
 
-// Public verification endpoints
+// 1. Initial TOTP verification endpoint (Public, returns signed Tracker Session JWT)
 router.post('/verify', verifyAccessCode);
-router.get('/shared/:accessCode', getSharedLocationHistory);
 
-// Protected ambient recording upload endpoint
+// 2. Authenticated Polling & Session Status (Protected by Tracker Session JWT)
+router.get('/status', protectTracker, getTrackerSessionStatus);
+
+// 3. Authenticated Geolocation Logs History (Protected by Tracker Session JWT)
+// Primary clean routes:
+router.get('/location/:accessCode', protectTracker, getSharedLocationHistory);
+router.get('/:accessCode', protectTracker, getSharedLocationHistory);
+// Backward-compatibility alias for legacy /api/contacts/shared/shared/:accessCode:
+router.get('/shared/:accessCode', protectTracker, getSharedLocationHistory);
+
+// 4. Protected ambient recording upload endpoint
 router.post('/alerts/:id/audio', protect, upload.single('audio'), uploadAmbientAudio);
+
+
 
 module.exports = router;

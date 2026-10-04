@@ -10,7 +10,7 @@
  * Pull to laptop: adb pull /sdcard/Download/safecircle_imu/ ~/safecircle_dataset/
  */
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import {
   StyleSheet,
   Alert,
   Platform,
+  NativeModules,
 } from 'react-native';
 import RNFS from 'react-native-fs';
 
@@ -28,6 +29,16 @@ import RNFS from 'react-native-fs';
 // ---------------------------------------------------------------------------
 
 type ActivityLabel = 'NORMAL' | 'THEFT' | 'WALK' | 'POCKET' | 'SIT' | 'JOG';
+
+interface RawSample {
+  t: number;
+  ax: number;
+  ay: number;
+  az: number;
+  gx: number;
+  gy: number;
+  gz: number;
+}
 
 interface SavedSession {
   filename: string;
@@ -80,6 +91,64 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Fixed-Rate 50Hz Linear Resampling Engine
+// ---------------------------------------------------------------------------
+
+/**
+ * Resamples non-uniform hardware sensor time series to a strict 50 Hz grid (20.0ms step).
+ * Solves jitter, duplicate timestamps, and bridge queue batching.
+ */
+function resampleTo50Hz(raw: RawSample[], label: string, pid: string): string[] {
+  if (raw.length < 2) return [];
+
+  // 1. Sort chronologically
+  const sorted = [...raw].sort((a, b) => a.t - b.t);
+
+  // 2. Deduplicate consecutive samples with identical or retrograde timestamps
+  const deduped: RawSample[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i === 0 || sorted[i].t > deduped[deduped.length - 1].t) {
+      deduped.push(sorted[i]);
+    }
+  }
+
+  if (deduped.length < 2) return [];
+
+  const tStart = deduped[0].t;
+  const tEnd = deduped[deduped.length - 1].t;
+  const stepMs = 20.0; // 50 Hz = exactly 20.0ms per sample frame
+
+  const rows: string[] = [];
+  let idx = 0;
+
+  for (let targetT = tStart; targetT <= tEnd; targetT += stepMs) {
+    // Advance idx to bracket targetT between deduped[idx] and deduped[idx + 1]
+    while (idx < deduped.length - 2 && deduped[idx + 1].t < targetT) {
+      idx++;
+    }
+
+    const p1 = deduped[idx];
+    const p2 = deduped[idx + 1];
+    const dt = p2.t - p1.t;
+    const alpha = dt > 0 ? Math.min(Math.max((targetT - p1.t) / dt, 0), 1) : 0;
+
+    const ax = p1.ax + alpha * (p2.ax - p1.ax);
+    const ay = p1.ay + alpha * (p2.ay - p1.ay);
+    const az = p1.az + alpha * (p2.az - p1.az);
+    const gx = p1.gx + alpha * (p2.gx - p1.gx);
+    const gy = p1.gy + alpha * (p2.gy - p1.gy);
+    const gz = p1.gz + alpha * (p2.gz - p1.gz);
+
+    // Guaranteed exact 20ms steps on every row
+    rows.push(
+      `${Math.round(targetT)},${ax.toFixed(6)},${ay.toFixed(6)},${az.toFixed(6)},${gx.toFixed(6)},${gy.toFixed(6)},${gz.toFixed(6)},${label},${pid}`
+    );
+  }
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -90,9 +159,10 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
   const [frameCount, setFrameCount] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
+  const [isGyroAvailable, setIsGyroAvailable] = useState<boolean | null>(null);
 
   // Refs to hold mutable recording state without triggering re-renders on every frame
-  const rowsRef = useRef<string[]>([]);
+  const rawSamplesRef = useRef<RawSample[]>([]);
   const accelSubRef = useRef<any>(null);
   const gyroSubRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
@@ -100,6 +170,53 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
   const frameCountRef = useRef(0);
   // Keep a stable ref to selectedLabel so the accelerometer callback can read it
   const selectedLabelRef = useRef<ActivityLabel | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Check Gyroscope Hardware on mount
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!sensorsModule) {
+      setIsGyroAvailable(false);
+      return;
+    }
+
+    const { RNSensorsGyroscope } = NativeModules;
+    if (RNSensorsGyroscope && typeof RNSensorsGyroscope.isAvailable === 'function') {
+      RNSensorsGyroscope.isAvailable()
+        .then(() => {
+          if (isMounted) setIsGyroAvailable(true);
+        })
+        .catch(() => {
+          if (isMounted) setIsGyroAvailable(false);
+        });
+    } else {
+      // Test subscription directly
+      const { gyroscope } = sensorsModule;
+      if (gyroscope && typeof gyroscope.subscribe === 'function') {
+        const sub = gyroscope.subscribe(
+          () => {
+            if (isMounted) setIsGyroAvailable(true);
+            if (sub?.unsubscribe) sub.unsubscribe();
+          },
+          () => {
+            if (isMounted) setIsGyroAvailable(false);
+          }
+        );
+        return () => {
+          isMounted = false;
+          if (sub?.unsubscribe) sub.unsubscribe();
+        };
+      } else {
+        setIsGyroAvailable(false);
+      }
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Start recording
@@ -124,36 +241,55 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
     // Sync label ref so the async accelerometer callback sees the current value
     selectedLabelRef.current = selectedLabel;
 
-    // Reset state
-    rowsRef.current = [];
+    // Reset raw buffer and state
+    rawSamplesRef.current = [];
+    currentGyroRef.current = { gx: 0, gy: 0, gz: 0 };
     frameCountRef.current = 0;
     setFrameCount(0);
     setElapsedSec(0);
     setIsRecording(true);
 
-    // Set 50 Hz on both sensors
+    // Set 50 Hz interval hint on sensors
     setUpdateIntervalForType(SensorTypes.accelerometer, SAMPLE_INTERVAL_MS);
     setUpdateIntervalForType(SensorTypes.gyroscope, SAMPLE_INTERVAL_MS);
 
-    // Gyroscope — update shared ref so accelerometer handler can read latest values
-    gyroSubRef.current = gyroscope.subscribe(
-      ({ x, y, z }: { x: number; y: number; z: number }) => {
-        currentGyroRef.current = { gx: x, gy: y, gz: z };
-      },
-      (err: any) => console.warn('[ImuLogger] Gyroscope error:', err),
-    );
+    // Gyroscope subscription
+    if (gyroscope && typeof gyroscope.subscribe === 'function') {
+      gyroSubRef.current = gyroscope.subscribe(
+        ({ x, y, z }: { x: number; y: number; z: number }) => {
+          currentGyroRef.current = { gx: x, gy: y, gz: z };
+          setIsGyroAvailable(true);
+        },
+        (err: any) => {
+          console.warn('[ImuLogger] Gyroscope error:', err);
+          setIsGyroAvailable(false);
+        },
+      );
+    }
 
-    // Accelerometer — fuse with latest gyro reading, push CSV row
+    // Accelerometer subscription — collects hardware timestamps and raw IMU vectors
     accelSubRef.current = accelerometer.subscribe(
-      ({ x, y, z }: { x: number; y: number; z: number }) => {
-        const ts = Date.now();
-        const { gx, gy, gz } = currentGyroRef.current;
-        const label = selectedLabelRef.current ?? 'UNKNOWN';
-        const pid = participantId.trim();
+      (data: any) => {
+        const ax = data.x ?? 0;
+        const ay = data.y ?? 0;
+        const az = data.z ?? 0;
 
-        rowsRef.current.push(
-          `${ts},${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)},${gx.toFixed(6)},${gy.toFixed(6)},${gz.toFixed(6)},${label},${pid}`
-        );
+        // Use true hardware timestamp from sensor HAL if present, otherwise epoch ms
+        const rawTs = typeof data.timestamp === 'number' && data.timestamp > 0
+          ? data.timestamp
+          : Date.now();
+
+        const { gx, gy, gz } = currentGyroRef.current;
+
+        rawSamplesRef.current.push({
+          t: rawTs,
+          ax,
+          ay,
+          az,
+          gx,
+          gy,
+          gz,
+        });
 
         frameCountRef.current += 1;
         // Update UI counter every 5 frames to avoid excessive re-renders
@@ -197,25 +333,40 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
 
     setIsRecording(false);
 
-    const rows   = rowsRef.current;
-    const frames = frameCountRef.current;
-    const label  = selectedLabelRef.current;
-
-    // Sync final frame count to UI
-    setFrameCount(frames);
+    const rawSamples = rawSamplesRef.current;
+    const label = selectedLabelRef.current ?? 'UNKNOWN';
+    const pid = participantId.trim();
 
     // Guard: discard if too short
-    if (frames < MIN_FRAMES) {
+    if (rawSamples.length < MIN_FRAMES) {
       Alert.alert(
         'Clip Too Short',
-        `Only ${frames} frames recorded (~${(frames * 0.02).toFixed(1)}s).\nMinimum is ${MIN_FRAMES} frames (~1s). Clip discarded.`,
+        `Only ${rawSamples.length} raw frames recorded (~${(rawSamples.length * 0.02).toFixed(1)}s).\nMinimum is ${MIN_FRAMES} frames (~1s). Clip discarded.`,
       );
-      rowsRef.current = [];
+      rawSamplesRef.current = [];
       frameCountRef.current = 0;
       setFrameCount(0);
       setElapsedSec(0);
       return;
     }
+
+    // ── Resample onto uniform 50 Hz grid (20.0ms delta per row) ──
+    const rows = resampleTo50Hz(rawSamples, label, pid);
+    const frames = rows.length;
+
+    if (frames < MIN_FRAMES) {
+      Alert.alert(
+        'Clip Too Short After Resampling',
+        `Duration was insufficient to generate ${MIN_FRAMES} uniform 50Hz frames. Clip discarded.`,
+      );
+      rawSamplesRef.current = [];
+      frameCountRef.current = 0;
+      setFrameCount(0);
+      setElapsedSec(0);
+      return;
+    }
+
+    setFrameCount(frames);
 
     // Build CSV content
     const header = 'timestamp_ms,ax,ay,az,gx,gy,gz,label,participant_id\n';
@@ -223,7 +374,6 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
 
     // Filename: P01_THEFT_1727087501882.csv
     const ts = Date.now();
-    const pid = participantId.trim();
     const filename = `${pid}_${label}_${ts}.csv`;
     const filePath = `${OUTPUT_DIR}/${filename}`;
 
@@ -247,15 +397,15 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
       ]);
 
       Alert.alert(
-        '✅ Clip Saved',
-        `${frames} frames (${(frames * 0.02).toFixed(1)}s) saved.\n\nFile:\n${filename}\n\nPull all clips to laptop:\nadb pull ${OUTPUT_DIR}/ ~/safecircle_dataset/`,
+        '✅ 50Hz Clip Saved',
+        `${frames} uniform frames (${(frames * 0.02).toFixed(1)}s at 50Hz) saved.\nEvery row is exactly 20ms apart.\n\nFile:\n${filename}\n\nPull all clips to laptop:\nadb pull ${OUTPUT_DIR}/ ~/safecircle_dataset/`,
       );
     } catch (err: any) {
       Alert.alert('Save Failed', `Could not write file:\n${err.message}`);
     }
 
     // Reset counters; label stays selected for the next clip
-    rowsRef.current = [];
+    rawSamplesRef.current = [];
     frameCountRef.current = 0;
     setFrameCount(0);
     setElapsedSec(0);
@@ -286,6 +436,28 @@ export const ImuLoggerScreen: React.FC<ImuLoggerScreenProps> = ({ onBack }) => {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {/* ── Hardware Gyroscope Warning Banner ── */}
+        {isGyroAvailable === false && (
+          <View style={styles.gyroWarningBanner}>
+            <Text style={styles.gyroWarningTitle}>⚠️ Hardware Gyroscope Unavailable</Text>
+            <Text style={styles.gyroWarningBody}>
+              This device has no physical gyroscope sensor. Gyro readings (gx, gy, gz) will be logged as 0.000000. Accelerometer (ax, ay, az) is actively sampled at 50 Hz.
+            </Text>
+          </View>
+        )}
+
+        {/* ── Sensor Status Row ── */}
+        <View style={styles.sensorStatusRow}>
+          <View style={styles.sensorBadge}>
+            <Text style={styles.sensorBadgeText}>Accel: 🟢 Active (50 Hz)</Text>
+          </View>
+          <View style={styles.sensorBadge}>
+            <Text style={styles.sensorBadgeText}>
+              Gyro: {isGyroAvailable === false ? '🔴 Absent' : isGyroAvailable === true ? '🟢 Active' : '🟡 Checking...'}
+            </Text>
+          </View>
+        </View>
+
         {/* ── Participant ID ── */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Participant ID</Text>
@@ -482,6 +654,45 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 48,
+  },
+  gyroWarningBanner: {
+    backgroundColor: '#451a03',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d97706',
+    padding: 14,
+    marginBottom: 20,
+  },
+  gyroWarningTitle: {
+    color: '#fbbf24',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  gyroWarningBody: {
+    color: '#fef3c7',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  sensorStatusRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  sensorBadge: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  sensorBadgeText: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '700',
   },
   section: {
     marginBottom: 24,
