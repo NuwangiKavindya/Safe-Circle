@@ -85,6 +85,10 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   // CRITICAL: cameraRef attached directly to <Camera ref={cameraRef} />
   const cameraRef = useRef<CameraRef>(null);
 
+  // Tracks whether the camera has performed the initial fly-in to user location.
+  // Prevents the map starting at a global world-zoom view when GPS resolves after mount.
+  const hasInitiallyFocused = useRef<boolean>(false);
+
   // Offline Caching State & Modal
   const [isOfflineModalVisible, setIsOfflineModalVisible] = useState<boolean>(false);
   const [isDownloadingPack, setIsDownloadingPack] = useState<boolean>(false);
@@ -183,11 +187,21 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
 
   /**
    * AUTOMATIC CAMERA RE-CENTERING ON LOAD & COORDINATE RESOLUTION
+   * On the very first valid GPS fix, fly in to street-level zoom (16.5).
+   * Subsequent coordinate updates use the normal recenter logic.
    */
   useEffect(() => {
     if (latitude !== null && longitude !== null && !isNaN(latitude) && !isNaN(longitude)) {
-      handleRecenter();
+      if (!hasInitiallyFocused.current) {
+        // First valid fix — fly to street level immediately
+        hasInitiallyFocused.current = true;
+        // Small delay to ensure the Camera ref is mounted and ready
+        setTimeout(() => handleRecenter(isFinalApproach ? 18.0 : 16.5), 150);
+      } else {
+        handleRecenter();
+      }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latitude, longitude, isFinalApproach]);
 
   if (latitude === null || longitude === null || isNaN(latitude) || isNaN(longitude)) {
@@ -354,12 +368,15 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
           }
         }}
       >
-        {/* CRITICAL: cameraRef attached directly to <Camera ref={cameraRef} /> centered on device */}
+        {/* CRITICAL: cameraRef attached directly to <Camera ref={cameraRef} />.
+            initialViewState positions the camera correctly if coords are already
+            available at mount. The useEffect above handles the case where GPS
+            resolves after the component has already rendered. */}
         <Camera
           ref={cameraRef}
           initialViewState={{
             centerCoordinate: [longitude, latitude],
-            zoomLevel: 16.5,
+            zoomLevel: isFinalApproach ? 18.0 : 16.5,
           } as any}
         />
 

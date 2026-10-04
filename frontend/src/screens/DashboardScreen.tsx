@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Switch,
   Alert,
+  RefreshControl,
 } from 'react-native';
 import { DeviceCard } from '../components/DeviceCard';
 import { ContactCard } from '../components/ContactCard';
@@ -54,6 +55,8 @@ interface DashboardScreenProps {
   guardianshipList?: GuardianshipWard[];
   onTrackWard?: (accessCode: string) => void;
   onOpenOfflineModal?: () => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
@@ -88,6 +91,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   guardianshipList = [],
   onTrackWard,
   onOpenOfflineModal,
+  onRefresh,
+  refreshing = false,
 }) => {
   // Safety Circle Active Tab: 'GUARDIANS' (My Protectors) or 'WARDS' (People I Protect)
   const [activeCircleTab, setActiveCircleTab] = React.useState<'GUARDIANS' | 'WARDS'>('GUARDIANS');
@@ -120,7 +125,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const activeProfile = SENSITIVITY_PROFILES[sensitivityMode] || SENSITIVITY_PROFILES.POCKET_GUARD;
 
   return (
-    <ScrollView contentContainerStyle={globalStyles.scrollContent}>
+    <ScrollView
+      contentContainerStyle={globalStyles.scrollContent}
+      refreshControl={
+        onRefresh ? (
+          <RefreshControl
+            refreshing={Boolean(refreshing)}
+            onRefresh={onRefresh}
+            tintColor={COLORS.accentGreen}
+            colors={[COLORS.accentGreen]}
+          />
+        ) : undefined
+      }
+    >
       {/* Dashboard Header */}
       <View style={styles.dashboardHeader}>
         <View>
@@ -480,6 +497,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               <Text style={[styles.emptyText, { fontSize: 12, marginTop: -4, color: COLORS.textMuted }]}>
                 When family or contacts add your phone number ({user?.phoneNumber || 'or email'}) as their trusted person, they will appear here.
               </Text>
+              {onRefresh && (
+                <TouchableOpacity style={[styles.linkButton, { marginTop: 12 }]} onPress={onRefresh}>
+                  <Text style={styles.linkButtonText}>🔄 Check for Updates</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : (
             guardianshipList.map((ward, index) => {

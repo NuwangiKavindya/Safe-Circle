@@ -8,6 +8,55 @@ const emailService = require('../services/emailService');
 const { generateURI } = require('../utils/totp');
 
 /**
+ * Helper to generate comprehensive phone number variants for cross-format matching.
+ * Handles: international prefix (+94, 94), domestic leading 0 (077), core 9-10 digits (77xxxxxxx),
+ * and stripping non-numeric punctuation.
+ */
+function getPhoneNumberVariants(phoneNumber) {
+    if (!phoneNumber) return [];
+    const clean = String(phoneNumber).replace(/[\s\-\(\)\.]/g, '').trim();
+    if (!clean) return [];
+
+    const variants = new Set();
+    variants.add(clean);
+
+    const digitsOnly = clean.replace(/\D/g, '');
+    if (digitsOnly) {
+        variants.add(digitsOnly);
+
+        // Core 9-digit suffix (e.g. Sri Lankan mobile 771234567 from +94771234567 or 0771234567)
+        if (digitsOnly.length >= 9) {
+            const core9 = digitsOnly.slice(-9);
+            variants.add(core9);
+            variants.add('0' + core9);
+            variants.add('+94' + core9);
+            variants.add('94' + core9);
+        }
+
+        // Core 10-digit suffix (e.g. US/India mobile)
+        if (digitsOnly.length >= 10) {
+            const core10 = digitsOnly.slice(-10);
+            variants.add(core10);
+            variants.add('0' + core10);
+            variants.add('1' + core10);
+            variants.add('+1' + core10);
+        }
+
+        if (clean.startsWith('+')) {
+            variants.add(clean.slice(1));
+        } else {
+            variants.add('+' + clean);
+        }
+
+        if (clean.startsWith('0')) {
+            variants.add(clean.slice(1));
+        }
+    }
+
+    return Array.from(variants).filter(v => v && v.length >= 7);
+}
+
+/**
  * @desc    Add a trusted contact with intelligent channel prioritization
  * @route   POST /api/contacts
  * @access  Private
@@ -24,12 +73,34 @@ exports.addContact = async (req, res) => {
             });
         }
 
+        // Sanitize phone & email
+        const cleanPhone = contactPhone.replace(/[\s\-\(\)\.]/g, '').trim();
+        const cleanEmail = contactEmail && contactEmail.trim() ? contactEmail.toLowerCase().trim() : null;
+
+        // Intelligent Channel Prioritization: Check if contact is an existing SafeCircle member
+        const phoneVariants = getPhoneNumberVariants(cleanPhone);
+        const whereConditions = [];
+        phoneVariants.forEach(p => {
+            whereConditions.push({ phoneNumber: { [Op.iLike]: `%${p}%` } });
+        });
+        if (cleanEmail) {
+            whereConditions.push({ email: cleanEmail });
+        }
+
+        const registeredUser = await User.findOne({
+            where: { [Op.or]: whereConditions },
+            include: [{ model: Device, as: 'devices' }]
+        });
+
+        // If registeredUser has an email and none was provided, auto-link email for robust identification
+        const finalEmail = cleanEmail || (registeredUser ? registeredUser.email : null);
+
         // 1. Create contact (beforeCreate hook generates accessCode handle + totpSecret)
         const contact = await TrustedContact.create({
             userId: req.user.id,
             contactName,
-            contactPhone,
-            contactEmail,
+            contactPhone: cleanPhone,
+            contactEmail: finalEmail,
             relationship,
             isVerified: false
         });
@@ -39,31 +110,6 @@ exports.addContact = async (req, res) => {
         //    The contact scans this as a QR code into Google Authenticator / Authy.
         //    The raw totpSecret is NOT included in this response for security.
         const totpProvisioningUri = generateURI(contactName, contact.totpSecret, 'SafeCircle');
-
-        // 3. Intelligent Channel Prioritization: Check if contact is an existing SafeCircle member
-        const cleanPhone = contactPhone.replace(/[\s\-\(\)]/g, '');
-        const phoneVariants = [cleanPhone];
-        if (cleanPhone.startsWith('+')) {
-            phoneVariants.push(cleanPhone.replace('+', ''));
-            if (cleanPhone.length > 10) {
-                phoneVariants.push(cleanPhone.slice(-10));
-            }
-        } else if (cleanPhone.length >= 10) {
-            phoneVariants.push('+' + cleanPhone);
-            phoneVariants.push(cleanPhone.slice(-10));
-        }
-
-        const whereConditions = [
-            { phoneNumber: { [Op.in]: phoneVariants } }
-        ];
-        if (contactEmail && contactEmail.trim()) {
-            whereConditions.push({ email: contactEmail.toLowerCase().trim() });
-        }
-
-        const registeredUser = await User.findOne({
-            where: { [Op.or]: whereConditions },
-            include: [{ model: Device, as: 'devices' }]
-        });
 
         let delivery = {
             isRegisteredUser: false,
@@ -87,13 +133,13 @@ exports.addContact = async (req, res) => {
                 wardId: req.user.id,
                 relationship: relationship || 'Guardian'
             });
-        } else if (contactEmail && contactEmail.trim()) {
+        } else if (finalEmail) {
             delivery.isRegisteredUser = false;
             delivery.deliveryChannel = 'EMAIL_INVITATION';
-            delivery.message = `Invitation email with access code dispatched to ${contactEmail.trim()}.`;
+            delivery.message = `Invitation email with access code dispatched to ${finalEmail}.`;
 
             await emailService.sendGuardianInvitationEmail({
-                recipientEmail: contactEmail.trim(),
+                recipientEmail: finalEmail,
                 recipientName: contactName,
                 senderName: req.user.fullName || 'SafeCircle User',
                 senderPhone: req.user.phoneNumber,
@@ -172,17 +218,7 @@ exports.getGuardianshipContacts = async (req, res) => {
     try {
         const currentUser = req.user;
 
-        const phoneVariants = [];
-        if (currentUser.phoneNumber) {
-            const rawPhone = currentUser.phoneNumber.trim();
-            phoneVariants.push(rawPhone);
-            if (rawPhone.startsWith('+')) {
-                phoneVariants.push(rawPhone.slice(1));
-            }
-            if (rawPhone.startsWith('0')) {
-                phoneVariants.push(rawPhone.slice(1));
-            }
-        }
+        const phoneVariants = getPhoneNumberVariants(currentUser.phoneNumber);
 
         const orConditions = [];
         phoneVariants.forEach(p => {

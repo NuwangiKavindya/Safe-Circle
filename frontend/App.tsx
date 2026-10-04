@@ -454,54 +454,56 @@ const MainApp = () => {
     );
   };
 
+  const handleRefreshData = async () => {
+    if (!token) return;
+    setLoading(true);
+    const [cRes, dRes, aRes, zRes, gRes] = await Promise.all([
+      apiService.getContacts(token),
+      apiService.getDevices(token),
+      apiService.getActiveAlerts(token),
+      apiService.getSafeZones(token),
+      apiService.getGuardianshipList(token),
+    ]);
+    setLoading(false);
+
+    if (cRes.success && cRes.data) {
+      setContacts(cRes.data);
+    } else if (!cRes.success) {
+      triggerFeedback(cRes.message || 'Failed to load safety contacts.');
+    }
+
+    if (gRes.success && gRes.data) {
+      setGuardianshipList(gRes.data);
+    }
+
+    if (dRes.success && dRes.data) {
+      const mappedDevices = dRes.data.map((d: any) => ({
+        id: d.id,
+        deviceName: d.deviceName,
+        deviceModel: d.deviceModel,
+        imeiNumber: d.imeiNumber,
+        deviceOs: d.deviceOs,
+        createdAt: d.createdAt,
+      }));
+      setDevices(mappedDevices);
+    } else if (!dRes.success) {
+      triggerFeedback(dRes.message || 'Failed to load registered devices.');
+    }
+
+    if (aRes.success && aRes.data && aRes.data.length > 0) {
+      setActiveAlert(aRes.data[0]);
+    } else {
+      setActiveAlert(null);
+    }
+
+    if (zRes.success && zRes.data) {
+      setSafeZones(zRes.data);
+    }
+  };
+
   useEffect(() => {
     if (token) {
-      const loadInitialData = async () => {
-        setLoading(true);
-        const [cRes, dRes, aRes, zRes, gRes] = await Promise.all([
-          apiService.getContacts(token),
-          apiService.getDevices(token),
-          apiService.getActiveAlerts(token),
-          apiService.getSafeZones(token),
-          apiService.getGuardianshipList(token),
-        ]);
-        setLoading(false);
-
-        if (cRes.success && cRes.data) {
-          setContacts(cRes.data);
-        } else if (!cRes.success) {
-          triggerFeedback(cRes.message || 'Failed to load safety contacts.');
-        }
-
-        if (gRes.success && gRes.data) {
-          setGuardianshipList(gRes.data);
-        }
-
-        if (dRes.success && dRes.data) {
-          const mappedDevices = dRes.data.map((d: any) => ({
-            id: d.id,
-            deviceName: d.deviceName,
-            deviceModel: d.deviceModel,
-            imeiNumber: d.imeiNumber,
-            deviceOs: d.deviceOs,
-            createdAt: d.createdAt,
-          }));
-          setDevices(mappedDevices);
-        } else if (!dRes.success) {
-          triggerFeedback(dRes.message || 'Failed to load registered devices.');
-        }
-
-        if (aRes.success && aRes.data && aRes.data.length > 0) {
-          setActiveAlert(aRes.data[0]);
-        } else {
-          setActiveAlert(null);
-        }
-
-        if (zRes.success && zRes.data) {
-          setSafeZones(zRes.data);
-        }
-      };
-      loadInitialData();
+      handleRefreshData();
     } else {
       setContacts([]);
       setGuardianshipList([]);
@@ -1253,7 +1255,9 @@ const MainApp = () => {
               setTrackerCode(accessCode);
               handleVerifyTrackerCode(accessCode);
             }}
-          onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
+            onRefresh={handleRefreshData}
+            refreshing={loading}
+            onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
           />
         )}
 

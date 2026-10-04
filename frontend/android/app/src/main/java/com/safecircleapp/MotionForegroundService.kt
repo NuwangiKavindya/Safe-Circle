@@ -104,10 +104,35 @@ class MotionForegroundService : Service(), SensorEventListener {
     private var lastTriggerTime: Long = 0
 
     // ─────────────────────────────────────────────────────────────────────────
-    // FIX Stage 2 — Quantized On-Device TFLite Model (< 15ms Neural Inference)
+    // Stage 2 — theft_detector.tflite
+    //
+    // Model spec (verified against train_theft_detector.py + normalization_constants.json):
+    //   Input:   [1, 100, 3]  INT8   — 100 samples × 3 channels
+    //   Channels (in order): ax, ay, az  (raw accelerometer m/s² — NO gyro)
+    //   Output:  [1, 1]       Float32 — sigmoid probability ∈ [0.0, 1.0]
+    //
+    // Preprocessing pipeline (must match training exactly):
+    //   Step 1 — Z-score normalization using training-set statistics:
+    //       ax_norm = (ax - 0.0029192413) / 2.094377279
+    //       ay_norm = (ay - 3.3800392151) / 2.676047564
+    //       az_norm = (az - 9.0580043793) / 2.934184790
+    //   Step 2 — INT8 quantization via tensor scale/zero-point:
+    //       int8_val = clamp(round(float_norm / input_scale) + input_zero_point, -128, 127)
+    //
+    // The model was trained on raw ax/ay/az only (CHANNELS=3 in training script).
+    // The device gyroscope is NOT used and was NOT part of training data.
     // ─────────────────────────────────────────────────────────────────────────
     private var tfliteInterpreter: Interpreter? = null
+    private var tfliteInputScale: Float = 1.0f
+    private var tfliteInputZeroPoint: Int = 0
+
+    // Each entry = FloatArray(3): [ax, ay, az] raw accelerometer values (m/s²)
     private val sensorSlidingWindow = ArrayList<FloatArray>(100)
+
+    // Z-score normalization constants from ml/normalization_constants.json
+    // Channel order: [ax, ay, az]
+    private val NORM_MEAN = floatArrayOf(0.0029192413f, 3.3800392151f, 9.0580043793f)
+    private val NORM_STD  = floatArrayOf(2.0943772793f, 2.6760475635f, 2.9341847897f)
 
     companion object {
         const val CHANNEL_ID              = "safecircle_motion_guard_channel"
@@ -144,17 +169,39 @@ class MotionForegroundService : Service(), SensorEventListener {
         // FIX 3: Init FusedLocationProviderClient bound to this service's context
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-        // FIX Stage 2: Initialize Quantized TFLite Interpreter from app assets
+        // Stage 2: Load theft_detector.tflite  [1,100,3] INT8, sigmoid output
+        // NOTE: theft_detection_model.tflite (old path) is intentionally NOT loaded.
         try {
-            val assetFd = assets.openFd("theft_detection_model.tflite")
+            val assetFd = assets.openFd("theft_detector.tflite")
             val fileInputStream = FileInputStream(assetFd.fileDescriptor)
             val fileChannel = fileInputStream.channel
-            val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, assetFd.startOffset, assetFd.declaredLength)
+            val modelBuffer = fileChannel.map(
+                FileChannel.MapMode.READ_ONLY,
+                assetFd.startOffset,
+                assetFd.declaredLength
+            )
+            fileInputStream.close()
             val options = Interpreter.Options().apply { setNumThreads(2) }
             tfliteInterpreter = Interpreter(modelBuffer, options)
-            android.util.Log.d("MotionForegroundService", "✅ Stage 2 Quantized TFLite Interpreter initialized in background service.")
+
+            // Read input tensor quantization parameters (scale + zero-point)
+            // so we can correctly quantize float→INT8 at inference time.
+            val inTensor = tfliteInterpreter!!.getInputTensor(0)
+            val inShape  = inTensor.shape()                   // expect [1,100,3]
+            val outShape = tfliteInterpreter!!.getOutputTensor(0).shape()  // expect [1,1]
+            val qParams  = inTensor.quantizationParams()
+            tfliteInputScale     = qParams.scale
+            tfliteInputZeroPoint = qParams.zeroPoint
+            android.util.Log.d(
+                "MotionForegroundService",
+                "✅ theft_detector.tflite loaded. " +
+                "Input shape: ${inShape.toList()}, " +
+                "Output shape: ${outShape.toList()}, " +
+                "Input quant: scale=$tfliteInputScale, zp=$tfliteInputZeroPoint"
+            )
         } catch (e: Exception) {
-            android.util.Log.w("MotionForegroundService", "TFLite model asset not yet available: ${e.message}")
+            android.util.Log.e("MotionForegroundService",
+                "❌ Failed to load theft_detector.tflite: ${e.message}")
         }
     }
 
@@ -454,48 +501,79 @@ class MotionForegroundService : Service(), SensorEventListener {
                 putInt("energyLevel", energyPct)
             })
 
-            // Record sample to 100-step sliding window for Stage 2 neural inference
+            // ── Sliding window: store [ax, ay, az] raw accelerometer values ────
+            // Channels match training script exactly (CHANNELS=3, ax/ay/az only).
+            // Gyroscope is NOT used — it was absent from all training CSVs.
             synchronized(sensorSlidingWindow) {
-                if (sensorSlidingWindow.size >= 100) {
-                    sensorSlidingWindow.removeAt(0)
-                }
-                sensorSlidingWindow.add(floatArrayOf(ax, ay, az, currentGx, currentGy, currentGz))
+                if (sensorSlidingWindow.size >= 100) sensorSlidingWindow.removeAt(0)
+                sensorSlidingWindow.add(floatArrayOf(ax, ay, az))
             }
 
             if (netAccel > accelLimit && jerk > jerkLimit && angularVelocity > gyroLimit) {
                 if (now - lastTriggerTime > 5000) {
                     lastTriggerTime = now
 
-                    // Stage 2: Neural Verification via Quantized TFLite (< 15ms)
+                    // ── Stage 2: theft_detector.tflite inference ────────────────────
+                    // Model spec: input [1,100,3] Float32, output [1,1] sigmoid Float32
+                    // Threshold: ≥ 0.50 = theft snatch anomaly (sigmoid midpoint)
                     var isConfirmed = true
-                    var confidence = 0.96
-                    var latencyMs = 11.4
+                    var confidence  = 0.0
+                    var latencyMs   = -1.0   // -1 means model not run
 
                     if (tfliteInterpreter != null && sensorSlidingWindow.size >= 40) {
                         try {
-                            val inputBuffer = ByteBuffer.allocateDirect(1 * 100 * 6 * 4).apply {
-                                order(ByteOrder.nativeOrder())
-                            }
+                            // ── Step 1: z-score normalize + quantize to INT8 ──────────
+                            // Input tensor is INT8: [1, 100, 3] = 300 bytes.
+                            // Pipeline matches train_theft_detector.py exactly:
+                            //   norm  = (raw - NORM_MEAN[c]) / NORM_STD[c]
+                            //   int8  = clamp(round(norm / inputScale) + inputZeroPoint, -128, 127)
+                            val inputBuffer = ByteBuffer.allocateDirect(1 * 100 * 3 * 1)
+                                .apply { order(ByteOrder.nativeOrder()) }
+
                             synchronized(sensorSlidingWindow) {
-                                for (s in sensorSlidingWindow) {
-                                    for (v in s) inputBuffer.putFloat(v)
+                                // Real samples
+                                for (sample in sensorSlidingWindow) {
+                                    for (c in 0..2) {
+                                        val norm = (sample[c] - NORM_MEAN[c]) / NORM_STD[c]
+                                        val q = if (tfliteInputScale != 0f)
+                                            Math.round(norm / tfliteInputScale) + tfliteInputZeroPoint
+                                        else
+                                            Math.round(norm).toInt()
+                                        inputBuffer.put(q.coerceIn(-128, 127).toByte())
+                                    }
                                 }
-                                val pad = 100 - sensorSlidingWindow.size
-                                for (i in 0 until pad * 6) inputBuffer.putFloat(0f)
+                                // Zero-pad remaining frames (3 bytes each)
+                                val padSamples = 100 - sensorSlidingWindow.size
+                                for (i in 0 until padSamples * 3) inputBuffer.put(0)
                             }
                             inputBuffer.rewind()
 
-                            val output = Array(1) { FloatArray(2) }
+                            // ── Step 2: run inference ──────────────────────────────────
+                            val output = Array(1) { FloatArray(1) }
                             val t0 = System.nanoTime()
                             tfliteInterpreter?.run(inputBuffer, output)
                             latencyMs = (System.nanoTime() - t0) / 1_000_000.0
 
-                            val snatchProb = output[0][1].toDouble()
-                            confidence = snatchProb
-                            isConfirmed = snatchProb >= 0.70
-                            android.util.Log.d("MotionForegroundService", "🧠 Stage 2 TFLite Evaluated: snatchProb=$snatchProb, latency=${latencyMs}ms")
+                            val snatchProb = output[0][0].toDouble()  // sigmoid ∈ [0,1]
+                            confidence  = snatchProb
+                            isConfirmed = snatchProb >= 0.50
+
+                            android.util.Log.d(
+                                "MotionForegroundService",
+                                "🧠 Stage 2 TFLite: snatchProb=${
+                                    String.format("%.4f", snatchProb)
+                                }, confirmed=$isConfirmed, latency=${
+                                    String.format("%.2f", latencyMs)
+                                }ms"
+                            )
                         } catch (e: Exception) {
-                            android.util.Log.e("MotionForegroundService", "Stage 2 inference failed: ${e.message}")
+                            android.util.Log.e(
+                                "MotionForegroundService",
+                                "❌ Stage 2 inference error: ${e.message}"
+                            )
+                            // On inference failure fall through with isConfirmed=true
+                            // (Stage 1 kinematic thresholds already passed — treat as
+                            // a likely event rather than silently dropping the alert)
                         }
                     }
 

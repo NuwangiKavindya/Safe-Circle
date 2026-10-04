@@ -673,7 +673,7 @@ Proactive theft detection necessitates real-time monitoring of hardware kinemati
 
 Traditional kinematic anomaly detection suffers from unacceptable false-positive rates caused by normal locomotion, running, or vehicle transit. SafeCircle conceptualizes a **Dual-Stage Detection Architecture**:
 * **Stage 1 (Fast-Path Kinematic Filter)**: High-frequency (50Hz) sensor sampling evaluated via lightweight mathematical heuristics (Jerk metric $J = \frac{d\vec{a}}{dt}$ and Root Mean Square energy). If kinematic thresholds are not exceeded, the subsystem remains quiescent, avoiding CPU wake locks.
-* **Stage 2 (Quantized On-Device Neural Network)**: When Stage 1 detects an anomalous jerk spike (e.g., sudden grab, pocket extraction, or rapid rotational fling), a sliding 128-sample time-series window is fed into a quantized TensorFlow Lite (TFLite) LSTM model. The model classifies the motion signature into *Benign Locomotion* versus *Theft Snatch Anomaly* within 15 milliseconds, triggering automated local lockdown and SOS broadcasting.
+* **Stage 2 (Quantized On-Device Neural Network)**: When Stage 1 detects an anomalous jerk spike (e.g., sudden grab, pocket extraction, or rapid rotational fling), a sliding 100-sample time-series window is fed into a quantized TensorFlow Lite (TFLite) 1D CNN model. The model classifies the motion signature into *Benign Locomotion* versus *Theft Snatch Anomaly* within 15 milliseconds, triggering automated local lockdown and SOS broadcasting.
 
 ---
 
@@ -1119,8 +1119,8 @@ The motion subsystem (`theftGuardService.ts`) samples tri-axial acceleration and
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                STAGE 2: QUANTIZED ON-DEVICE TFLITE LSTM MODEL               │
-│ - Input: 128-sample sliding time-series feature window                      │
+│               STAGE 2: QUANTIZED ON-DEVICE TFLITE 1D CNN MODEL              │
+│ - Input: 100-sample sliding time-series feature window                      │
 │ - Quantized INT8 Weight Execution (< 15 ms inference latency)               │
 │ - Output: Binary Classification (Benign Locomotion vs. Theft Snatch)       │
 └──────────────────────────────────────┬──────────────────────────────────────┘
@@ -1221,18 +1221,14 @@ Table 5.2: End-to-End Functional Test Suite Execution Matrix (TC-01 through TC-1
 
 ## 5.3 Empirical System Performance Benchmarks
 
-Quantitative performance telemetry was captured across 100 automated iterations using the benchmark suite (`backend/tests/performanceBenchmark.js`). Table 5.3 presents the empirical results.
+Quantitative performance telemetry was captured across 100 automated iterations using the benchmark suite (`backend/tests/performanceBenchmark.js`). Table 5.3 presents the three metrics for which live measurements were collected.
 
-Table 5.3: Empirical System Performance Benchmark Telemetry Summary
+Table 5.3: Empirical System Performance Benchmark Telemetry (Measured Values Only)
 | Evaluation Metric Category | Experimental Test Condition | Sample ($N$) | Mean (Avg) | Median ($p50$) | 95th %tile ($p95$) | Maximum | Target Threshold | Operational Status |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **REST Auth API Latency** | User Registration & JWT Issuance | 100 req | **66.94 ms** | **66.86 ms** | **71.73 ms** | **78.42 ms** | < 200 ms | ✅ **EXCEEDS** |
-| **Protected Query REST Latency**| Query Device Specs (`GET /api/device`)| 100 req | **1.77 ms** | **1.58 ms** | **3.29 ms** | **4.81 ms** | < 150 ms | ✅ **EXCEEDS** |
+| **Protected Query REST Latency** | Query Device Specs (`GET /api/device`) | 100 req | **1.77 ms** | **1.58 ms** | **3.29 ms** | **4.81 ms** | < 150 ms | ✅ **EXCEEDS** |
 | **WebSocket Broadcast Delay** | Client emit to room broadcast RTT | 50 bursts | **21.20 ms** | **21.17 ms** | **21.85 ms** | **24.10 ms** | < 100 ms | ✅ **EXCEEDS** |
-| **Audio Override Trigger Delay**| Remote button tap to audible output | 50 triggers| **285.0 ms** | **280.0 ms** | **315.0 ms** | **320.0 ms** | < 350 ms | ✅ **EXCEEDS** |
-| **Open-Sky GPS Accuracy** | Open outdoor environment | 100 fixes | **$\pm$ 3.8 m** | **$\pm$ 3.5 m** | **$\pm$ 4.8 m** | **$\pm$ 5.2 m** | $\pm$ 5.0 m | ✅ **EXCEEDS** |
-| **Assisted Indoor Accuracy** | Multi-story concrete facility | 100 fixes | **$\pm$ 18.2 m**| **$\pm$ 17.5 m**| **$\pm$ 24.1 m**| **$\pm$ 26.5 m**| $\pm$ 30.0 m | ✅ **EXCEEDS** |
-| **Foreground Battery Drain** | Continuous background monitoring | 8 hours | **1.1% / hr** | **1.1% / hr** | **1.2% / hr** | **1.3% / hr** | < 1.5% / hr | ✅ **EXCEEDS** |
 
 ### 5.3.1 REST API Response Latency
 Authentication requests—including `bcrypt` password hashing with a work factor of 10 and database writes—averaged **66.94 ms** ($p95 = 71.73\text{ ms}$). Protected in-memory and indexed database queries demonstrated an average latency of **1.77 ms**, well beneath the 150 ms performance threshold.
@@ -1240,43 +1236,16 @@ Authentication requests—including `bcrypt` password hashing with a work factor
 ### 5.3.2 Real-Time WebSocket Streaming Latency
 Bidirectional WebSocket round-trip transmission times averaged **21.20 ms** ($p95 = 21.85\text{ ms}$). Telemetry updates are broadcast to subscribed trusted contact dashboards almost instantaneously.
 
-### 5.3.3 GPS Fix Margin and Positioning Accuracy
-Under open-sky test conditions, the Android Fused Location Provider achieved an average horizontal positioning accuracy of **$\pm 3.8\text{ meters}$**. In indoor concrete environments, GPS signal attenuation widened the fix margin to an average of **$\pm 18.2\text{ meters}$**, underscoring the critical need for close-range AR camera guidance.
-
-### 5.3.4 Remote Audio Trigger Response Latency
-The complete round-trip latency—measuring the elapsed time from a trusted contact tapping "Trigger Siren" to the physical speaker emitting high-decibel audio on a silenced phone—averaged **285.0 ms** ($p95 = 315.0\text{ ms}$).
-
-### 5.3.5 Battery Consumption Profile
-Over an 8-hour continuous background monitoring evaluation, average battery consumption was measured at **1.1% per hour**, comfortably satisfying the target threshold of $< 1.5\%\text{ per hour}$.
-
-```
-Latency (ms)
-  350 ──────────────────────────────────────────────────────────────────────────
-  300 ──────────────────────────────────────────────────── [ 285.0 ms ] ────────
-  250 ─────────────────────────────────────────────────── Audio Siren Override
-  200 ──────────────────────────────────────────────────────────────────────────
-  150 ──────────────────────────────────────────────────────────────────────────
-  100 ──────────────────────────────────────────────────────────────────────────
-   50 ────────── [ 66.94 ms ] ──────────────────────────────────────────────────
-                Auth REST API        [ 21.20 ms ]
-    0 ────────────────────────────── WebSocket RTT ──── [ 1.77 ms ] ───────────
-                                                       Protected API
-```
-Figure 5.1: Empirical System Performance Latency Comparison Across Architectural Layers
+### 5.3.3 Measurement Limitations
+Four additional performance dimensions were identified as evaluation targets but were **not formally measured** within the scope of this study: (1) end-to-end audio override trigger latency (remote tap to audible speaker output); (2) on-device Stage 1 sensor-pipeline computation time; (3) on-device Stage 2 neural inference latency; and (4) foreground background battery drain rate. GPS positioning accuracy was similarly not formally evaluated against a ground-truth reference. These metrics constitute open evaluation items and are discussed further in Chapter 6 (Limitations). Future work should instrument these dimensions using `adb shell dumpsys batterystats` for battery profiling, Android `System.nanoTime()` logcat instrumentation for on-device pipeline timing, and structured GPS field trials against known coordinates.
 
 ---
 
 ## 5.4 Dual-Stage Sensor Anomaly Processing Metrics
 
-Table 5.4 summarizes the computational latency and execution overhead of the motion detection pipeline.
+The Dual-Stage motion detection pipeline was implemented and deployed as described in Chapter 3 and Chapter 4. Stage 1 kinematic thresholds were validated functionally via manual shake tests on a physical Android device, confirming correct threshold triggering across all three sensitivity profiles (POCKET\_GUARD, TABLE\_GUARD, ACTIVE\_GUARD).
 
-Table 5.4: Dual-Stage Motion Sensor Anomaly Processing Benchmark Metrics
-| Processing Stage | Algorithmic Operation | Execution Environment | Sample Size | Mean Latency | Maximum Overhead | Evaluation Status |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Stage 1: Fast-Path Filter** | 50Hz Jerk and RMS Energy Math | Native JS Engine | 500 frames | **2.80 ms** | **4.50 ms** | ✅ Meets Target (<5ms) |
-| **Stage 2: Neural Inference** | Quantized TFLite LSTM Model | Mobile CPU Core | 100 windows| **11.40 ms** | **14.80 ms** | ✅ Meets Target (<15ms) |
-
-Stage 1 consumes negligible processing capacity (2.80 ms), remaining quiescent during standard locomotion. When anomalous motion spikes occur, Stage 2 executes in 11.40 ms, providing real-time anomaly classification without UI stutter.
+Quantitative latency benchmarking of the on-device sensor pipeline—including Stage 1 jerk/RMS computation time and Stage 2 TFLite 1D CNN inference time—was **not conducted** within the scope of this study. No instrumented timing data was collected for these execution paths during evaluation. Accordingly, no performance table for sensor pipeline latency is included here. This is acknowledged as a limitation of the evaluation; see Section 6.3 for discussion. The `System.nanoTime()` instrumentation required to produce such measurements has been implemented in `MotionForegroundService.kt` and will emit results to logcat on the next physical device test run.
 
 ---
 
