@@ -47,6 +47,7 @@ interface MapViewComponentProps {
   height?: DimensionValue;
   isFullScreen?: boolean;
   themeMode?: 'dark' | 'light';
+  defaultZoom?: number;
   onBack?: () => void;
   onExpandFullScreen?: () => void;
   onOpenARView?: () => void;
@@ -71,6 +72,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   height = 340,
   isFullScreen = false,
   themeMode,
+  defaultZoom = 16.5,
   onBack,
   onExpandFullScreen,
   onOpenARView,
@@ -159,50 +161,64 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
 
   /**
    * 3. MAPLIBRE CAMERA REF RE-CENTERING METHOD
-   * Strictly invokes setCamera on cameraRef (attached directly to <Camera ref={cameraRef} />)
+   * Directly invokes flyTo / setStop on cameraRef with MapLibre's { center: [lng, lat], zoom } options
    */
   const handleRecenter = (customZoom?: number | any) => {
     if (!cameraRef.current || latitude === null || longitude === null || isNaN(latitude) || isNaN(longitude)) return;
 
-    const targetZoom = typeof customZoom === 'number' ? customZoom : (isFinalApproach ? 18.0 : 16.5);
+    const targetZoom = typeof customZoom === 'number'
+      ? customZoom
+      : (defaultZoom || (isFinalApproach ? 18.0 : 16.5));
 
-    const cameraConfig = {
-      centerCoordinate: [longitude as number, latitude as number],
-      zoomLevel: targetZoom,
-      animationDuration: 1200,
-    };
+    const lng = Number(longitude);
+    const lat = Number(latitude);
 
-    if (typeof (cameraRef.current as any).setCamera === 'function') {
-      (cameraRef.current as any).setCamera(cameraConfig);
-    } else if (typeof (cameraRef.current as any).setStop === 'function') {
-      (cameraRef.current as any).setStop({
-        centerCoordinate: [longitude as number, latitude as number],
-        zoomLevel: targetZoom,
-        duration: 1200,
-      });
-    } else if (typeof (cameraRef.current as any).flyTo === 'function') {
-      (cameraRef.current as any).flyTo([longitude as number, latitude as number], 1200);
+    try {
+      if (typeof cameraRef.current.flyTo === 'function') {
+        cameraRef.current.flyTo({
+          center: [lng, lat],
+          zoom: targetZoom,
+          duration: 1200,
+        });
+      } else if (typeof cameraRef.current.setStop === 'function') {
+        cameraRef.current.setStop({
+          center: [lng, lat],
+          zoom: targetZoom,
+          duration: 1200,
+          easing: 'fly',
+        });
+      } else if (typeof cameraRef.current.jumpTo === 'function') {
+        cameraRef.current.jumpTo({
+          center: [lng, lat],
+          zoom: targetZoom,
+        });
+      }
+    } catch (err) {
+      console.warn('[MapViewComponent] Error recentering camera:', err);
     }
   };
 
   /**
    * AUTOMATIC CAMERA RE-CENTERING ON LOAD & COORDINATE RESOLUTION
-   * On the very first valid GPS fix, fly in to street-level zoom (16.5).
-   * Subsequent coordinate updates use the normal recenter logic.
+   * Immediately flies in to street-level zoom (default 16.5) centered on the user's location.
    */
   useEffect(() => {
     if (latitude !== null && longitude !== null && !isNaN(latitude) && !isNaN(longitude)) {
       if (!hasInitiallyFocused.current) {
-        // First valid fix — fly to street level immediately
         hasInitiallyFocused.current = true;
-        // Small delay to ensure the Camera ref is mounted and ready
-        setTimeout(() => handleRecenter(isFinalApproach ? 18.0 : 16.5), 150);
+        handleRecenter();
+        const t1 = setTimeout(() => handleRecenter(), 200);
+        const t2 = setTimeout(() => handleRecenter(), 500);
+        return () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
       } else {
         handleRecenter();
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latitude, longitude, isFinalApproach]);
+  }, [latitude, longitude, isFinalApproach, defaultZoom]);
 
   if (latitude === null || longitude === null || isNaN(latitude) || isNaN(longitude)) {
     return (
@@ -360,6 +376,9 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
         logo={false}
         attribution={false}
         androidView="texture"
+        onDidFinishLoadingMap={() => {
+          handleRecenter();
+        }}
         onPress={(e: any) => {
           // When in Geofence Editor Mode, map touch captures coordinates for center pin
           if (isEditorActive && e.geometry && e.geometry.type === 'Point') {
@@ -368,16 +387,13 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
           }
         }}
       >
-        {/* CRITICAL: cameraRef attached directly to <Camera ref={cameraRef} />.
-            initialViewState positions the camera correctly if coords are already
-            available at mount. The useEffect above handles the case where GPS
-            resolves after the component has already rendered. */}
+        {/* MapLibre Camera initialized to user's coordinate and close street-level zoom (16.5) */}
         <Camera
           ref={cameraRef}
           initialViewState={{
-            centerCoordinate: [longitude, latitude],
-            zoomLevel: isFinalApproach ? 18.0 : 16.5,
-          } as any}
+            center: [Number(longitude), Number(latitude)],
+            zoom: isFinalApproach ? 18.0 : defaultZoom,
+          }}
         />
 
         {/* 4. USER LOCATION MARKER */}
