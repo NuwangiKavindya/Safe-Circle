@@ -367,6 +367,12 @@ io.use(async (socket, next) => {
 io.on('connection', (socket) => {
     console.log(`Socket client authenticated & connected: ${socket.id} (Role: ${socket.authData.isTracker ? 'TRACKER' : 'OWNER'})`);
 
+    // Auto-join user room for registered owners so personal security commands reach the active device
+    if (!socket.authData.isTracker && socket.authData.userId) {
+        socket.join(`user-${socket.authData.userId}`);
+        console.log(`Socket ${socket.id} (Owner) joined user room: user-${socket.authData.userId}`);
+    }
+
     // Join device room to receive location updates for a specific device
     socket.on('join-device-room', async (data) => {
         try {
@@ -532,6 +538,64 @@ io.on('connection', (socket) => {
             });
         } catch (err) {
             console.error('[Socket.IO] Error in heartbeat_ping:', err.message);
+        }
+    });
+
+    // Remote Siren Trigger: Guardian or Owner triggering audible alarm on ward's device
+    socket.on('remote_trigger_siren', async (data) => {
+        try {
+            const { deviceId, action } = data || {};
+            const sirenAction = action === 'STOP' ? 'STOP' : 'START';
+            const triggeredByRole = socket.authData.isTracker ? 'GUARDIAN' : 'OWNER';
+            const targetUserId = socket.authData.userId;
+
+            // Resolve target device
+            let targetDeviceId = deviceId;
+            let device = null;
+            if (targetDeviceId) {
+                device = await Device.findByPk(targetDeviceId);
+            }
+            if (!device) {
+                device = await Device.findOne({
+                    where: { userId: targetUserId },
+                    order: [['updatedAt', 'DESC']]
+                });
+                if (device) targetDeviceId = device.id;
+            }
+
+            // Both owner and guardian must belong to the user who owns this device
+            if (device && device.userId !== targetUserId) {
+                console.warn(`[Socket.IO Security] Unauthorized remote_trigger_siren attempt for device-${targetDeviceId} from socket ${socket.id}`);
+                return socket.emit('error_message', { message: 'Unauthorized: No access to trigger remote siren on this device.' });
+            }
+
+            console.log(`[Socket.IO] 🔊 Remote Siren ${sirenAction} command issued for device ${targetDeviceId} by ${triggeredByRole} (socket ${socket.id})`);
+
+            const commandPayload = {
+                deviceId: targetDeviceId,
+                userId: targetUserId,
+                action: sirenAction,
+                triggeredBy: triggeredByRole,
+                timestamp: new Date().toISOString()
+            };
+
+            // Broadcast to the target device room (for listeners on device room)
+            if (targetDeviceId) {
+                io.to(`device-${targetDeviceId}`).emit('remote_siren_command', commandPayload);
+            }
+            // Broadcast to user room (ensures device owner receives it immediately)
+            io.to(`user-${targetUserId}`).emit('remote_siren_command', commandPayload);
+
+            // Acknowledge back to sender
+            socket.emit('remote_siren_ack', {
+                success: true,
+                action: sirenAction,
+                deviceId: targetDeviceId,
+                timestamp: commandPayload.timestamp
+            });
+        } catch (err) {
+            console.error('[Socket.IO] Error in remote_trigger_siren handler:', err.message);
+            socket.emit('error_message', { message: 'Failed to process remote siren command.' });
         }
     });
 

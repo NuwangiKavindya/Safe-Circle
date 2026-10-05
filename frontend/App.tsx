@@ -107,6 +107,8 @@ const MainApp = () => {
   const [trackerConnectionStatus, setTrackerConnectionStatus] = useState<'CONNECTED' | 'RECONNECTING' | 'OFFLINE'>('RECONNECTING');
   const [lastTrackerFixTime, setLastTrackerFixTime] = useState<number | null>(null);
   const [trackerReconnectTrigger, setTrackerReconnectTrigger] = useState<number>(0);
+  const [trackerRemoteSirenActive, setTrackerRemoteSirenActive] = useState<boolean>(false);
+  const [isRemoteSirenTriggeredByGuardian, setIsRemoteSirenTriggeredByGuardian] = useState<boolean>(false);
   const socketRef = useRef<any>(null);
 
   // Feedback Banner State
@@ -641,6 +643,29 @@ const MainApp = () => {
     triggerFeedback('Emergency SOS cancelled. Device marked safe.', false);
   };
 
+  // Silence Remote Siren from Ward Device
+  const handleSilenceDeviceRemoteSiren = () => {
+    setIsRemoteSirenTriggeredByGuardian(false);
+    soundService.stopSound();
+    try {
+      Vibration.cancel();
+    } catch (e) {}
+
+    const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : undefined;
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('remote_trigger_siren', {
+        deviceId: targetDeviceId,
+        action: 'STOP',
+      });
+    }
+    if (token) {
+      apiService.triggerRemoteSiren(token, targetDeviceId, 'STOP').catch(err => {
+        console.warn('[Remote Siren Silence Error]:', err.message);
+      });
+    }
+    triggerFeedback('Remote siren silenced. Device marked safe.', false);
+  };
+
   const handleSelectSensitivityMode = (mode: SensitivityMode) => {
     setSensitivityMode(mode);
     motionService.setSensitivityMode(mode);
@@ -694,6 +719,28 @@ const MainApp = () => {
           transports: ['websocket'],
           forceNew: true,
           auth: { token },
+        });
+      }
+
+      if (socketRef.current) {
+        socketRef.current.emit('join-device-room', { deviceId: targetDeviceId });
+
+        socketRef.current.off('remote_siren_command');
+        socketRef.current.on('remote_siren_command', (cmd: any) => {
+          console.log('[Ward Device Socket] 🚨 Received remote_siren_command:', cmd);
+          if (cmd && cmd.action === 'START') {
+            setIsRemoteSirenTriggeredByGuardian(true);
+            soundService.playSound('police_siren');
+            try {
+              Vibration.vibrate([0, 800, 300, 800], true);
+            } catch (e) {}
+          } else if (cmd && cmd.action === 'STOP') {
+            setIsRemoteSirenTriggeredByGuardian(false);
+            soundService.stopSound();
+            try {
+              Vibration.cancel();
+            } catch (e) {}
+          }
         });
       }
 
@@ -1148,6 +1195,13 @@ const MainApp = () => {
         setTrackerConnectionStatus('CONNECTED');
       });
 
+      socket.on('remote_siren_command', (cmd: any) => {
+        console.log('[Tracker Socket] Received remote_siren_command:', cmd);
+        if (cmd && cmd.action) {
+          setTrackerRemoteSirenActive(cmd.action === 'START');
+        }
+      });
+
       socket.on('disconnect', (reason) => {
         console.log('WebSocket Disconnected:', reason);
         setTrackerConnectionStatus('OFFLINE');
@@ -1169,6 +1223,36 @@ const MainApp = () => {
     setTrackerConnectionStatus('RECONNECTING');
     setTrackerReconnectTrigger(prev => prev + 1);
     triggerFeedback('Attempting to re-establish live WebSocket stream...', false);
+  };
+
+  const handleToggleRemoteSiren = async (trigger: boolean) => {
+    const action = trigger ? 'START' : 'STOP';
+    setTrackerRemoteSirenActive(trigger);
+    const targetDeviceId = trackerInfo?.deviceId;
+    console.log(`[Tracker Remote Siren] Dispatching ${action} command for device: ${targetDeviceId}`);
+
+    // 1. Emit via active WebSocket
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('remote_trigger_siren', {
+        deviceId: targetDeviceId,
+        action,
+      });
+    }
+
+    // 2. Redundant delivery via REST API fallback
+    const authToken = trackerSessionToken || token;
+    if (authToken) {
+      apiService.triggerRemoteSiren(authToken, targetDeviceId, action).catch(err => {
+        console.warn('[Remote Siren REST Fallback Error]:', err.message);
+      });
+    }
+
+    triggerFeedback(
+      trigger
+        ? '🚨 Remote emergency siren command broadcast to ward device!'
+        : '⏹️ Remote siren silenced.',
+      false
+    );
   };
 
   useEffect(() => {
@@ -1388,6 +1472,57 @@ const MainApp = () => {
           </View>
         </Modal>
 
+        {/* Remote Siren Triggered by Guardian Alert Modal */}
+        <Modal
+          visible={isRemoteSirenTriggeredByGuardian}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={handleSilenceDeviceRemoteSiren}
+        >
+          <View style={{
+            flex: 1,
+            backgroundColor: 'rgba(15, 23, 42, 0.96)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 24,
+          }}>
+            <View style={{
+              width: '100%',
+              backgroundColor: '#450A0A',
+              borderRadius: 24,
+              padding: 28,
+              alignItems: 'center',
+              borderWidth: 2.5,
+              borderColor: '#EF4444',
+            }}>
+              <Text style={{ fontSize: 52, marginBottom: 12 }}>🔊</Text>
+              <Text style={{ color: '#FFF', fontSize: 24, fontWeight: '900', textAlign: 'center', marginBottom: 8 }}>
+                REMOTE SIREN ACTIVATED!
+              </Text>
+              <Text style={{ color: '#FCA5A5', fontSize: 14, textAlign: 'center', marginBottom: 24, lineHeight: 20 }}>
+                A trusted emergency guardian has remotely triggered the audible siren on your device to help locate it.
+              </Text>
+
+              <TouchableOpacity
+                style={{
+                  width: '100%',
+                  backgroundColor: '#DC2626',
+                  paddingVertical: 16,
+                  borderRadius: 14,
+                  alignItems: 'center',
+                  borderWidth: 1.5,
+                  borderColor: '#F87171',
+                }}
+                onPress={handleSilenceDeviceRemoteSiren}
+              >
+                <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 }}>
+                  ⏹️ SILENCE / STOP SIREN
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         {currentScreen === 'BIND_DEVICE' && (
           <BindDeviceScreen
             deviceForm={deviceForm}
@@ -1429,7 +1564,9 @@ const MainApp = () => {
             audioProgress={audioProgress}
             connectionStatus={trackerConnectionStatus}
             lastFixTimestamp={lastTrackerFixTime}
+            isRemoteSirenActive={trackerRemoteSirenActive}
             onToggleAudioPlaying={() => setTrackerAudioPlaying(!trackerAudioPlaying)}
+            onToggleRemoteSiren={handleToggleRemoteSiren}
             onNavigateFullScreenMap={() => {
               setPreviousScreenForMap('TRACKER_DASHBOARD');
               setCurrentScreen('FULLSCREEN_MAP');
@@ -1445,6 +1582,7 @@ const MainApp = () => {
               setTrackerSessionToken(null);
               setTrackerLogs([]);
               setLastTrackerFixTime(null);
+              setTrackerRemoteSirenActive(false);
             }}
           />
         )}

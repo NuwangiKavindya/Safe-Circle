@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Animated,
+  Alert,
 } from 'react-native';
 import { MapViewComponent } from '../components/MapViewComponent';
 import { globalStyles, COLORS } from '../styles/theme';
@@ -18,7 +19,9 @@ interface TrackerDashboardScreenProps {
   audioProgress: number;
   connectionStatus?: 'CONNECTED' | 'RECONNECTING' | 'OFFLINE';
   lastFixTimestamp?: number | null;
+  isRemoteSirenActive?: boolean;
   onToggleAudioPlaying: () => void;
+  onToggleRemoteSiren?: (active: boolean) => void;
   onDisconnect: () => void;
   onNavigateFullScreenMap?: () => void;
   onNavigateARView?: () => void;
@@ -32,7 +35,9 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
   audioProgress,
   connectionStatus = 'CONNECTED',
   lastFixTimestamp,
+  isRemoteSirenActive = false,
   onToggleAudioPlaying,
+  onToggleRemoteSiren,
   onDisconnect,
   onNavigateFullScreenMap,
   onNavigateARView,
@@ -47,6 +52,9 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
 
   // Pulse animation for live status badge
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Pulse animation for active remote siren button
+  const sirenPulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (connectionStatus === 'CONNECTED' || connectionStatus === 'RECONNECTING') {
@@ -70,6 +78,54 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
       pulseAnim.setValue(1);
     }
   }, [connectionStatus, pulseAnim]);
+
+  useEffect(() => {
+    if (isRemoteSirenActive) {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(sirenPulseAnim, {
+            toValue: 1.05,
+            duration: 400,
+            useNativeDriver: true,
+          }),
+          Animated.timing(sirenPulseAnim, {
+            toValue: 1,
+            duration: 400,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    } else {
+      sirenPulseAnim.setValue(1);
+    }
+  }, [isRemoteSirenActive, sirenPulseAnim]);
+
+  const handleSirenPress = () => {
+    if (isRemoteSirenActive) {
+      if (onToggleRemoteSiren) {
+        onToggleRemoteSiren(false);
+      }
+    } else {
+      Alert.alert(
+        '🔊 Trigger Remote Siren',
+        `Blast the emergency siren at 100% volume on ${trackerInfo.targetUser?.fullName || 'the target device'}?\n\nThis overrides silent/vibrate mode to locate the phone or deter an attacker.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: '🔊 Sound Alarm Now',
+            style: 'destructive',
+            onPress: () => {
+              if (onToggleRemoteSiren) {
+                onToggleRemoteSiren(true);
+              }
+            },
+          },
+        ]
+      );
+    }
+  };
 
   // Real-time elapsed time calculation for last coordinate fix
   const [timeAgo, setTimeAgo] = useState<string>('Just now');
@@ -211,6 +267,66 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
           )}
         </View>
       )}
+
+      {/* Remote Siren Emergency Hardware Control Card */}
+      <View
+        style={[
+          styles.remoteSirenCard,
+          isRemoteSirenActive && styles.remoteSirenCardActive,
+        ]}
+      >
+        <View style={styles.remoteSirenHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <Text style={{ fontSize: 24, marginRight: 10 }}>
+              {isRemoteSirenActive ? '🚨' : '🔊'}
+            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.remoteSirenTitle}>Remote Audible Siren</Text>
+              <Text style={styles.remoteSirenSubtitle}>
+                {isRemoteSirenActive
+                  ? 'Siren active • Blasting 100% volume on ward device'
+                  : 'Hardware STREAM_ALARM override for device recovery'}
+              </Text>
+            </View>
+          </View>
+          <View
+            style={[
+              styles.remoteSirenStatusBadge,
+              isRemoteSirenActive
+                ? { backgroundColor: 'rgba(239, 68, 68, 0.25)', borderColor: COLORS.accentRed }
+                : { backgroundColor: 'rgba(148, 163, 184, 0.15)', borderColor: '#475569' },
+            ]}
+          >
+            <Text
+              style={[
+                styles.remoteSirenStatusText,
+                { color: isRemoteSirenActive ? '#F87171' : COLORS.textSecondary },
+              ]}
+            >
+              {isRemoteSirenActive ? 'BLASTING' : 'STANDBY'}
+            </Text>
+          </View>
+        </View>
+
+        <Animated.View style={{ transform: [{ scale: isRemoteSirenActive ? sirenPulseAnim : 1 }] }}>
+          <TouchableOpacity
+            style={[
+              styles.remoteSirenButton,
+              isRemoteSirenActive
+                ? styles.remoteSirenButtonActive
+                : styles.remoteSirenButtonInactive,
+            ]}
+            onPress={handleSirenPress}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.remoteSirenButtonText}>
+              {isRemoteSirenActive
+                ? '⏹️ STOP REMOTE SIREN'
+                : '🔊 TRIGGER REMOTE SIREN'}
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
 
       {/* Interactive Native Map Visualization Header & Viewport */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 8 }}>
@@ -531,5 +647,67 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: COLORS.borderDark,
+  },
+  remoteSirenCard: {
+    backgroundColor: '#1E1B4B',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 8,
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: '#4F46E5',
+  },
+  remoteSirenCardActive: {
+    backgroundColor: 'rgba(127, 29, 29, 0.45)',
+    borderColor: COLORS.accentRed,
+  },
+  remoteSirenHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  remoteSirenTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  remoteSirenSubtitle: {
+    color: '#94A3B8',
+    fontSize: 12,
+    marginTop: 2,
+    maxWidth: '90%',
+  },
+  remoteSirenStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  remoteSirenStatusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  remoteSirenButton: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  remoteSirenButtonInactive: {
+    backgroundColor: '#DC2626',
+    borderColor: '#EF4444',
+  },
+  remoteSirenButtonActive: {
+    backgroundColor: '#450A0A',
+    borderColor: '#F87171',
+  },
+  remoteSirenButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
 });

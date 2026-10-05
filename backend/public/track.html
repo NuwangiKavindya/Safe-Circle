@@ -377,6 +377,17 @@
                     </div>
                     <button class="audio-play-button" id="playAudioBtn">Play</button>
                 </div>
+
+                <!-- Remote Siren Control Card -->
+                <div class="info-card" id="remoteSirenCard" style="background: #1e1b4b; border-color: #4f46e5;">
+                    <div class="info-title" style="color: #c7d2fe;">Remote Hardware Siren</div>
+                    <div style="font-size: 12px; color: #cbd5e1; margin-bottom: 12px; line-height: 1.4;">
+                        Blast 100% volume alarm on ward's phone to deter theft or pinpoint device location.
+                    </div>
+                    <button id="remoteSirenBtn" style="width: 100%; background: #dc2626; color: #fff; font-weight: 800; border: none; padding: 12px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <span>🔊</span> <span id="sirenBtnText">Trigger Remote Siren</span>
+                    </button>
+                </div>
             </aside>
 
             <!-- Leaflet Container -->
@@ -515,27 +526,65 @@
         }
 
         // Initialize socket.io connection
+        let currentTargetDeviceId = null;
+        let isRemoteSirenActive = false;
+
+        function updateSirenButtonUI() {
+            const sirenBtn = document.getElementById('remoteSirenBtn');
+            const sirenText = document.getElementById('sirenBtnText');
+            if (!sirenBtn || !sirenText) return;
+            if (isRemoteSirenActive) {
+                sirenBtn.style.background = '#450a0a';
+                sirenBtn.style.border = '2px solid #ef4444';
+                sirenText.innerText = 'Stop Remote Siren';
+            } else {
+                sirenBtn.style.background = '#dc2626';
+                sirenBtn.style.border = 'none';
+                sirenText.innerText = 'Trigger Remote Siren';
+            }
+        }
+
         function initWebSocket(targetUserId) {
             socket = io();
 
             socket.on('connect', () => {
                 console.log("WebSocket connected. Subscribing to target devices.");
-                // Subscribe to users devices
-                // Note: The backend controller rooms are keyed by: device-[id]
-                // We fetch the device details or rely on active alerts. Since backend maps devices to userId,
-                // we can look at the historical log to find the deviceId. 
-                // Let's also check active alerts for device details.
-                // We can query devices from the history logs
                 fetch(`/api/location/shared/${activeAccessCode}`)
                     .then(res => res.json())
                     .then(resData => {
                         if (resData.success && resData.data.length > 0) {
                             const deviceId = resData.data[0].deviceId;
+                            currentTargetDeviceId = deviceId;
                             socket.emit('join-device-room', { deviceId });
                             console.log(`Subscribed to device updates for device ID: ${deviceId}`);
                         }
                     });
             });
+
+            // Listen to remote siren events from backend
+            socket.on('remote_siren_command', (cmd) => {
+                console.log("Remote siren command received:", cmd);
+                isRemoteSirenActive = cmd.action === 'START';
+                updateSirenButtonUI();
+            });
+
+            // Hook up remote siren button click
+            const sirenBtn = document.getElementById('remoteSirenBtn');
+            if (sirenBtn) {
+                sirenBtn.onclick = () => {
+                    if (isRemoteSirenActive) {
+                        if (socket) {
+                            socket.emit('remote_trigger_siren', { deviceId: currentTargetDeviceId, action: 'STOP' });
+                        }
+                    } else {
+                        if (confirm("Blast emergency siren at 100% volume on target device?\n\nThis will override silent/vibrate mode to help locate the phone or deter an assailant.")) {
+                            if (socket) {
+                                socket.emit('remote_trigger_siren', { deviceId: currentTargetDeviceId, action: 'START' });
+                            }
+                        }
+                    }
+                };
+            }
 
             // Listen to coordinates updates from backend broadcast
             socket.on('location-broadcast', (data) => {

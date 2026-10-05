@@ -2,9 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { verifyAccessCode, getTrackerSessionStatus, getSharedLocationHistory } = require('../controllers/verifyController');
+const { verifyAccessCode, getTrackerSessionStatus, getSharedLocationHistory, triggerRemoteSiren } = require('../controllers/verifyController');
 const { uploadAmbientAudio } = require('../controllers/alertController');
-const { protect, protectTracker } = require('../middleware/auth');
+const { protect, protectTracker, protectAny } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -55,6 +55,7 @@ router.get('/shared/:accessCode', protectTracker, getSharedLocationHistory);
 // 4. Protected ambient recording upload endpoint
 router.post('/alerts/:id/audio', protect, upload.single('audio'), uploadAmbientAudio);
 
-
+// 5. Remote audible siren trigger endpoint (Protected by Tracker Session JWT or User JWT)
+router.post('/remote-siren', protectAny, triggerRemoteSiren);
 
 module.exports = router;

@@ -97,6 +97,23 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   const [cacheProgress, setCacheProgress] = useState<number | null>(null);
   const [isCached, setIsCached] = useState<boolean>(false);
 
+  // Sync cache state when offline modal opens
+  useEffect(() => {
+    if (isOfflineModalVisible) {
+      offlineMapService
+        .isPackCached('Liberty-Colombo-Bounds')
+        .then((cached) => {
+          setIsCached(cached);
+          if (cached) {
+            setCacheProgress(100);
+          } else {
+            setCacheProgress(null);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOfflineModalVisible]);
+
   // Radar Animation for Final Approach (< 15 meters)
   const radarAnim = useRef(new Animated.Value(1)).current;
 
@@ -290,6 +307,8 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
         latitude: latitude || 6.9271,
         longitude: longitude || 79.8612,
         mapStyle: currentStyle,
+        minZoom: 10,
+        maxZoom: 14,
       },
       progress => setCacheProgress(progress)
     );
@@ -299,6 +318,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
       setIsCached(true);
       setCacheProgress(100);
     } else {
+      setIsCached(false);
       setCacheProgress(null);
     }
   };
@@ -796,7 +816,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
               </View>
               <View style={styles.metaRow}>
                 <Text style={styles.metaLabel}>Zoom Level Range:</Text>
-                <Text style={[styles.metaValue, { color: activeTheme.textPrimary }]}>Zoom 10 to Zoom 18 (Street Precision)</Text>
+                <Text style={[styles.metaValue, { color: activeTheme.textPrimary }]}>Zoom 10 to Zoom 14 (Street Precision Vector)</Text>
               </View>
               <View style={styles.metaRow}>
                 <Text style={styles.metaLabel}>Storage Target:</Text>

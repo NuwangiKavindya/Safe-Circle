@@ -37,13 +37,17 @@ export const OfflinePackModal: React.FC<OfflinePackModalProps> = ({
   // Check if pack is already cached on mount/open
   useEffect(() => {
     if (visible) {
-      offlineMapService.getCachedPacks().then((packs: any[]) => {
-        const found = packs && packs.some((p: any) => p?.name === packName);
-        if (found) {
-          setIsCached(true);
-          setCacheProgress(100);
-        }
-      }).catch(() => {});
+      offlineMapService
+        .isPackCached(packName)
+        .then((cached) => {
+          setIsCached(cached);
+          if (cached) {
+            setCacheProgress(100);
+          } else {
+            setCacheProgress(null);
+          }
+        })
+        .catch(() => {});
     }
   }, [visible]);
 
@@ -61,6 +65,8 @@ export const OfflinePackModal: React.FC<OfflinePackModalProps> = ({
         mapStyle: isDark
           ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
           : 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+        minZoom: 10,
+        maxZoom: 14,
       },
       (progress: number) => {
         setCacheProgress(progress);
@@ -72,6 +78,7 @@ export const OfflinePackModal: React.FC<OfflinePackModalProps> = ({
       setIsCached(true);
       setCacheProgress(100);
     } else {
+      setIsCached(false);
       setCacheProgress(null);
     }
   };
@@ -129,7 +136,7 @@ export const OfflinePackModal: React.FC<OfflinePackModalProps> = ({
           </View>
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>Zoom Level Range:</Text>
-            <Text style={[styles.metaValue, { color: theme.textPrimary }]}>Zoom 10 - Zoom 18 (Street Precision)</Text>
+            <Text style={[styles.metaValue, { color: theme.textPrimary }]}>Zoom 10 - Zoom 14 (Street Precision Vector)</Text>
           </View>
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>Storage Target:</Text>

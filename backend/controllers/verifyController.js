@@ -275,3 +275,67 @@ exports.getSharedLocationHistory = async (req, res) => {
     }
 };
 
+/**
+ * @desc    Remotely trigger or silence the physical audible alarm on ward's device
+ * @route   POST /api/contacts/shared/remote-siren
+ * @access  Private (Device Owner or Authorized Tracker via protectAny)
+ */
+exports.triggerRemoteSiren = async (req, res) => {
+    try {
+        const { deviceId, action } = req.body || {};
+        const sirenAction = action === 'STOP' ? 'STOP' : 'START';
+
+        // Identify the target ward's userId
+        const targetUserId = req.isTracker ? req.trackerContact.userId : req.user.id;
+
+        // Resolve device
+        let targetDeviceId = deviceId;
+        let device = null;
+        if (targetDeviceId) {
+            device = await Device.findByPk(targetDeviceId);
+        }
+        if (!device) {
+            device = await Device.findOne({
+                where: { userId: targetUserId },
+                order: [['updatedAt', 'DESC']]
+            });
+            if (device) targetDeviceId = device.id;
+        }
+
+        if (device && device.userId !== targetUserId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Unauthorized: You do not have access to trigger alarm on this device.'
+            });
+        }
+
+        const triggeredByRole = req.isTracker ? 'GUARDIAN' : 'OWNER';
+        const io = req.app.get('io');
+        const payload = {
+            deviceId: targetDeviceId,
+            userId: targetUserId,
+            action: sirenAction,
+            triggeredBy: triggeredByRole,
+            timestamp: new Date().toISOString()
+        };
+
+        if (io) {
+            if (targetDeviceId) {
+                io.to(`device-${targetDeviceId}`).emit('remote_siren_command', payload);
+            }
+            io.to(`user-${targetUserId}`).emit('remote_siren_command', payload);
+            console.log(`[Remote Siren REST] 🔊 Siren ${sirenAction} broadcast for device ${targetDeviceId} (user ${targetUserId}) by ${triggeredByRole}`);
+        }
+
+        res.status(200).json({
+            success: true,
+            action: sirenAction,
+            deviceId: targetDeviceId,
+            message: `Remote siren ${sirenAction === 'START' ? 'activated' : 'deactivated'} successfully.`
+        });
+    } catch (error) {
+        console.error('[Remote Siren REST] Error:', error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+

@@ -593,6 +593,45 @@ class ApiService {
   }
 
   /**
+   * Remotely trigger or silence the physical audible alarm siren on ward's device
+   */
+  async triggerRemoteSiren(
+    token: string,
+    deviceId: string | undefined,
+    action: 'START' | 'STOP'
+  ): Promise<{ success: boolean; action?: string; message?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/contacts/shared/remote-siren`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ deviceId, action }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return {
+          success: false,
+          message: data.message || 'Failed to trigger remote siren',
+        };
+      }
+
+      return {
+        success: true,
+        action: data.action,
+        message: data.message,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: error.message || 'Network error occurred',
+      };
+    }
+  }
+
+  /**
    * Add a new trusted contact
    */
   async addContact(token: string, payload: AddContactPayload): Promise<ContactResponse> {
