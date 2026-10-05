@@ -159,6 +159,22 @@ exports.uploadAmbientAudio = async (req, res) => {
         alert.audioFileUrl = fileUrl;
         await alert.save();
 
+        // Broadcast real-time audio update to connected guardians and trackers
+        const io = req.app.get('io');
+        if (io) {
+            const audioPayload = {
+                alertId: alert.id,
+                audioFileUrl: fileUrl,
+                timestamp: new Date().toISOString()
+            };
+            io.to(`tracker-${req.user.id}`).emit('ambient_audio_update', audioPayload);
+            io.to(`user-${req.user.id}`).emit('ambient_audio_update', audioPayload);
+            if (alert.deviceId) {
+                io.to(`device-${alert.deviceId}`).emit('ambient_audio_update', audioPayload);
+            }
+            console.log(`[Audio Upload] 🎙️ Ambient audio update broadcast for user ${req.user.id}: ${fileUrl}`);
+        }
+
         res.status(200).json({
             success: true,
             message: 'Audio recording uploaded successfully.',

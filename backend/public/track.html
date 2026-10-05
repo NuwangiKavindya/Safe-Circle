@@ -651,8 +651,16 @@
                 updateMapLocation(lat, lng, data.accuracy, data.timestamp);
             });
 
+            // Listen for instant ambient audio snapshots from the ward device
+            socket.on('ambient_audio_update', (data) => {
+                console.log("🎙️ Received instant ambient audio update:", data);
+                if (data && data.audioFileUrl) {
+                    displayAudioCard(data.audioFileUrl);
+                }
+            });
+
             // Periodically check if audio recording is uploaded
-            setInterval(checkAmbientAudio, 15000);
+            setInterval(checkAmbientAudio, 10000);
             checkAmbientAudio();
         }
 
@@ -706,10 +714,20 @@
             }
         }
 
+        let currentLoadedAudioUrl = null;
         function displayAudioCard(url) {
             const card = document.getElementById('audioCard');
             const playBtn = document.getElementById('playAudioBtn');
             card.style.display = 'flex';
+
+            if (currentLoadedAudioUrl !== url) {
+                if (audioPlayer) {
+                    audioPlayer.pause();
+                    audioPlayer = null;
+                }
+                currentLoadedAudioUrl = url;
+                playBtn.innerText = 'Play';
+            }
 
             playBtn.onclick = () => {
                 if (audioPlayer && !audioPlayer.paused) {
@@ -717,10 +735,18 @@
                     playBtn.innerText = 'Play';
                 } else {
                     if (!audioPlayer) {
-                        audioPlayer = new Audio(url);
+                        const authenticatedUrl = activeTrackerToken ? `${url}?token=${encodeURIComponent(activeTrackerToken)}` : url;
+                        audioPlayer = new Audio(authenticatedUrl);
                         audioPlayer.onended = () => { playBtn.innerText = 'Play'; };
+                        audioPlayer.onerror = (e) => {
+                            console.error('Audio playback error:', e);
+                            playBtn.innerText = 'Error';
+                        };
                     }
-                    audioPlayer.play();
+                    audioPlayer.play().catch(e => {
+                        console.warn('Audio play request interrupted:', e);
+                        playBtn.innerText = 'Play';
+                    });
                     playBtn.innerText = 'Pause';
                 }
             };

@@ -984,9 +984,18 @@ class ApiService {
   async uploadAmbientAudio(token: string, alertId: string, audioFile: any): Promise<AlertResponse> {
     try {
       const formData = new FormData();
-      formData.append('audio', audioFile);
 
-      const response = await fetch(`${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio`, {
+      // Ensure proper formatting for React Native OkHttp file upload
+      const filePart = {
+        uri: audioFile.uri,
+        type: audioFile.type || 'audio/m4a',
+        name: audioFile.name || `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.m4a`,
+      };
+      formData.append('audio', filePart as any);
+
+      console.log(`[Audio Upload] Posting audio to ${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio (URI: ${filePart.uri})`);
+
+      let response = await fetch(`${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -994,6 +1003,17 @@ class ApiService {
         },
         body: formData,
       });
+
+      if (response.status === 404) {
+        console.log(`[Audio Upload] Shared endpoint 404, falling back to ${API_BASE_URL}/api/alerts/${alertId}/audio`);
+        response = await fetch(`${API_BASE_URL}/api/alerts/${alertId}/audio`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+          body: formData,
+        });
+      }
 
       const data = await response.json();
       if (!response.ok) {
@@ -1008,6 +1028,7 @@ class ApiService {
         data: data.data,
       };
     } catch (error: any) {
+      console.warn('[Audio Upload Exception]:', error.message || error);
       return {
         success: false,
         message: error.message || 'Network error occurred',
