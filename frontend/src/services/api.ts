@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import RNFS from 'react-native-fs';
 import { API_BASE_URL as ENV_API_BASE_URL } from '@env';
 
 // Default Fallbacks
@@ -983,23 +984,87 @@ class ApiService {
    */
   async uploadAmbientAudio(token: string, alertId: string, audioFile: any): Promise<AlertResponse> {
     try {
-      const formData = new FormData();
+      const fileName = audioFile.name || `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.m4a`;
+      const mimeType = audioFile.type || 'audio/m4a';
 
-      // Ensure proper formatting for React Native OkHttp file upload
+      // 1. Try RNFS native file uploader first on Android (direct disk-to-HTTP streaming, bypasses JS FormData bridge)
+      if (audioFile.uri && !audioFile.uri.startsWith('data:') && RNFS && typeof RNFS.uploadFiles === 'function') {
+        try {
+          const diskFilePath = audioFile.uri.replace(/^file:\/\//, '');
+          console.log(`[Audio Upload] Initiating RNFS native multipart upload: ${diskFilePath}`);
+
+          let uploadResult = await RNFS.uploadFiles({
+            toUrl: `${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio`,
+            files: [{
+              name: 'audio',
+              filename: fileName,
+              filepath: diskFilePath,
+              filetype: mimeType,
+            }],
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+            fields: {},
+          }).promise;
+
+          if (uploadResult.statusCode === 404) {
+            console.log(`[Audio Upload] Shared endpoint returned 404, retrying at ${API_BASE_URL}/api/alerts/${alertId}/audio`);
+            uploadResult = await RNFS.uploadFiles({
+              toUrl: `${API_BASE_URL}/api/alerts/${alertId}/audio`,
+              files: [{
+                name: 'audio',
+                filename: fileName,
+                filepath: diskFilePath,
+                filetype: mimeType,
+              }],
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+              },
+              fields: {},
+            }).promise;
+          }
+
+          if (uploadResult.statusCode >= 200 && uploadResult.statusCode < 300) {
+            const data = JSON.parse(uploadResult.body);
+            console.log('[Audio Upload] ✅ RNFS native upload succeeded:', data);
+            return {
+              success: true,
+              data: data.data,
+            };
+          } else {
+            console.warn(`[Audio Upload] RNFS returned status ${uploadResult.statusCode}:`, uploadResult.body);
+            try {
+              const errData = JSON.parse(uploadResult.body);
+              return {
+                success: false,
+                message: errData.message || `Upload failed with status ${uploadResult.statusCode}`,
+              };
+            } catch (_) {
+              // fallback below
+            }
+          }
+        } catch (rnfsError: any) {
+          console.warn('[Audio Upload] RNFS native upload failed, falling back to fetch FormData:', rnfsError.message || rnfsError);
+        }
+      }
+
+      // 2. Fallback to standard fetch FormData
+      const formData = new FormData();
       const filePart = {
         uri: audioFile.uri,
-        type: audioFile.type || 'audio/m4a',
-        name: audioFile.name || `ambient-sos-snapshot-${Date.now().toString().slice(-4)}.m4a`,
+        type: mimeType,
+        name: fileName,
       };
       formData.append('audio', filePart as any);
 
-      console.log(`[Audio Upload] Posting audio to ${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio (URI: ${filePart.uri})`);
+      console.log(`[Audio Upload] Posting audio via fetch to ${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio (URI: ${filePart.uri})`);
 
       let response = await fetch(`${API_BASE_URL}/api/contacts/shared/alerts/${alertId}/audio`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          // Note: Do not set Content-Type header when sending FormData, fetch will set it automatically with boundary.
         },
         body: formData,
       });
