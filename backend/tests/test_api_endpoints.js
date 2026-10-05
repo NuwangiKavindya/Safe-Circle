@@ -305,6 +305,40 @@ async function main() {
     return `Access correctly denied without Session JWT (HTTP 401)`;
   });
 
+  // 16c. Start Guardian Tracker Session (1-Tap In-App Tracking for Registered Guardian)
+  await runStep('Start Guardian Tracker Session (POST /api/contacts/guardianship/:accessCode/session)', async () => {
+    // Register guardian Jane
+    const janeUser = {
+      fullName: `Guardian Jane ${uniqueId}`,
+      email: `jane-${uniqueId}@example.com`,
+      phoneNumber: `+19998887777`,
+      password: 'Password123!',
+      confirmPassword: 'Password123!',
+    };
+    const regRes = await request('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(janeUser),
+      headers: { Authorization: '' },
+    });
+    if (!regRes.ok || !regRes.data?.token) throw new Error(regRes.data?.message || 'Failed to register guardian Jane');
+    const janeToken = regRes.data.token;
+
+    // Call 1-tap session endpoint with Jane's token
+    const { status, ok, data } = await request(`/api/contacts/guardianship/${testAccessCode}/session`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${janeToken}` },
+    });
+    if (!ok || !data?.trackerSessionToken) throw new Error(data?.message || `HTTP ${status}`);
+
+    // Verify the returned trackerSessionToken can access shared location history
+    const streamRes = await request(`/api/contacts/shared/location/${testAccessCode}`, {
+      headers: { Authorization: `Bearer ${data.trackerSessionToken}` },
+    });
+    if (!streamRes.ok || !Array.isArray(streamRes.data?.data)) throw new Error(streamRes.data?.message || `HTTP ${streamRes.status}`);
+
+    return `1-Tap Session Started! Session Token verified, retrieved ${streamRes.data.data.length} breadcrumb(s) for ward ${data.data?.targetUser?.fullName}`;
+  });
+
   // 17. Resolve Emergency Alert
   await runStep('Resolve Alert (PUT /api/alerts/:id/resolve)', async () => {
     const { status, ok, data } = await request(`/api/alerts/${testAlertId}/resolve`, {

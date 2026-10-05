@@ -559,6 +559,40 @@ class ApiService {
   }
 
   /**
+   * Start an authenticated tracker session for a ward in the user's Guardianship Circle (1-tap tracking)
+   */
+  async startGuardianTrackerSession(token: string, accessCode: string): Promise<VerifyCodeResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/contacts/guardianship/${accessCode}/session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        return {
+          success: false,
+          message: data.message || 'Failed to start tracking session',
+        };
+      }
+
+      return {
+        success: true,
+        trackerSessionToken: data.trackerSessionToken,
+        data: data.data,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: error.message || 'Network error occurred',
+      };
+    }
+  }
+
+  /**
    * Add a new trusted contact
    */
   async addContact(token: string, payload: AddContactPayload): Promise<ContactResponse> {

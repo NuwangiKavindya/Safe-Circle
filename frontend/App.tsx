@@ -1030,6 +1030,36 @@ const MainApp = () => {
     }
   };
 
+  const handleTrackWard = async (accessCode: string) => {
+    if (!token) {
+      triggerFeedback('Authentication session expired. Please log in again.');
+      return;
+    }
+    setTrackerCode(accessCode);
+    setLoading(true);
+    const result = await apiService.startGuardianTrackerSession(token, accessCode);
+    setLoading(false);
+
+    if (result.success && result.data) {
+      setTrackerInfo(result.data);
+      if (result.trackerSessionToken) {
+        setTrackerSessionToken(result.trackerSessionToken);
+      }
+
+      const logResult = await apiService.getSharedLocationHistory(accessCode, result.trackerSessionToken);
+      if (logResult.success && logResult.data) {
+        setTrackerLogs(logResult.data);
+        if (logResult.data.length > 0) {
+          setLastTrackerFixTime(Date.now());
+        }
+      }
+      setCurrentScreen('TRACKER_DASHBOARD');
+      triggerFeedback(`Tracking connection established for ${result.data.targetUser?.fullName || result.data.contactName}`, false);
+    } else {
+      triggerFeedback(result.message || 'Unable to start tracking session for this ward.');
+    }
+  };
+
   useEffect(() => {
     let intervalId: any = null;
     if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo && trackerSessionToken) {
@@ -1040,7 +1070,7 @@ const MainApp = () => {
           const isAlwaysOn = statusRes.data.sharingMode === 'ALWAYS_ON';
           if (!statusRes.data.isActiveSos && !isAlwaysOn) {
             triggerFeedback('Emergency SOS has been resolved by the user.', false);
-            setCurrentScreen('WELCOME');
+            setCurrentScreen(token ? 'DASHBOARD' : 'WELCOME');
             setTrackerInfo(null);
             setTrackerSessionToken(null);
             setTrackerLogs([]);
@@ -1251,10 +1281,7 @@ const MainApp = () => {
             onDeleteContact={handleDeleteContact}
             onToggleSharingMode={handleToggleSharingMode}
             guardianshipList={guardianshipList}
-            onTrackWard={(accessCode: string) => {
-              setTrackerCode(accessCode);
-              handleVerifyTrackerCode(accessCode);
-            }}
+            onTrackWard={handleTrackWard}
             onRefresh={handleRefreshData}
             refreshing={loading}
             onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
@@ -1413,7 +1440,7 @@ const MainApp = () => {
             }}
             onReconnect={handleReconnectTrackerSocket}
             onDisconnect={() => {
-              setCurrentScreen('WELCOME');
+              setCurrentScreen(token ? 'DASHBOARD' : 'WELCOME');
               setTrackerInfo(null);
               setTrackerSessionToken(null);
               setTrackerLogs([]);

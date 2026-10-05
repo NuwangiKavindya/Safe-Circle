@@ -6,6 +6,7 @@ const Device = require('../models/Device');
 const pushService = require('../services/pushService');
 const emailService = require('../services/emailService');
 const { generateURI } = require('../utils/totp');
+const jwt = require('jsonwebtoken');
 
 /**
  * Helper to generate comprehensive phone number variants for cross-format matching.
@@ -294,6 +295,116 @@ exports.getGuardianshipContacts = async (req, res) => {
             success: true,
             count: formattedData.length,
             data: formattedData
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+/**
+ * @desc    Start an authenticated tracker session for a registered guardian (1-tap in-app tracking)
+ * @route   POST /api/contacts/guardianship/:accessCode/session
+ * @access  Private (Logged-in guardian with valid User JWT)
+ */
+exports.createGuardianTrackerSession = async (req, res) => {
+    try {
+        const { accessCode } = req.params;
+        const currentUser = req.user;
+
+        // 1. Find the contact relationship by accessCode
+        const contact = await TrustedContact.findOne({
+            where: { accessCode },
+            include: [{ model: User, as: 'user' }]
+        });
+
+        if (!contact) {
+            return res.status(404).json({
+                success: false,
+                message: 'Ward contact record not found.'
+            });
+        }
+
+        // 2. Verify that req.user is authorized to protect this ward
+        const phoneVariants = getPhoneNumberVariants(currentUser.phoneNumber);
+        const cleanContactPhone = (contact.contactPhone || '').replace(/[\s\-\(\)\.]/g, '').trim();
+
+        const isPhoneMatch = phoneVariants.some(p => {
+            const cleanP = p.replace(/\D/g, '');
+            const cleanCP = cleanContactPhone.replace(/\D/g, '');
+            return cleanCP.includes(cleanP) || cleanP.includes(cleanCP) || (cleanP.length >= 7 && cleanCP.endsWith(cleanP.slice(-7)));
+        });
+
+        const isEmailMatch = currentUser.email && contact.contactEmail &&
+            currentUser.email.trim().toLowerCase() === contact.contactEmail.trim().toLowerCase();
+
+        if (!isPhoneMatch && !isEmailMatch) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied: You are not designated as the trusted guardian for this contact.'
+            });
+        }
+
+        // 3. Privacy check: active SOS or ALWAYS_ON mode
+        const activeAlert = await Alert.findOne({
+            where: { userId: contact.userId, status: 'ACTIVE' }
+        });
+
+        const isAlwaysOn = contact.sharingMode === 'ALWAYS_ON';
+        if (!activeAlert && !isAlwaysOn) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access Denied: Location sharing is set to Emergency-Only and the ward is not currently in an active SOS emergency state.'
+            });
+        }
+
+        // 4. Mark contact as verified on successful session creation
+        if (!contact.isVerified) {
+            contact.isVerified = true;
+            await contact.save();
+        }
+
+        // 5. Resolve active deviceId for the ward
+        let deviceId = activeAlert ? activeAlert.deviceId : null;
+        if (!deviceId) {
+            const userDevice = await Device.findOne({
+                where: { userId: contact.userId },
+                order: [['updatedAt', 'DESC']]
+            });
+            if (userDevice) deviceId = userDevice.id;
+        }
+
+        // 6. Issue 2-hour Tracker Session JWT
+        const trackerSessionToken = jwt.sign(
+            {
+                contactId: contact.id,
+                userId: contact.userId,
+                accessCode: contact.accessCode,
+                role: 'TRACKER'
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: '2h' }
+        );
+
+        res.status(200).json({
+            success: true,
+            trackerSessionToken,
+            data: {
+                contactName: contact.contactName,
+                relationship: contact.relationship,
+                sharingMode: contact.sharingMode || 'EMERGENCY_ONLY',
+                targetUser: {
+                    id: contact.user ? contact.user.id : contact.userId,
+                    fullName: contact.user ? contact.user.fullName : contact.contactName,
+                    phoneNumber: contact.user ? contact.user.phoneNumber : ''
+                },
+                isActiveSos: !!activeAlert,
+                alertId: activeAlert ? activeAlert.id : null,
+                deviceId: deviceId,
+                audioFileUrl: activeAlert ? activeAlert.audioFileUrl : null
+            }
         });
     } catch (error) {
         res.status(500).json({

@@ -214,6 +214,20 @@ exports.getSharedLocationHistory = async (req, res) => {
         });
 
         if (devices.length === 0) {
+            if (activeAlert && activeAlert.latitude && activeAlert.longitude) {
+                return res.status(200).json({
+                    success: true,
+                    count: 1,
+                    data: [{
+                        id: activeAlert.id,
+                        deviceId: activeAlert.deviceId,
+                        latitude: parseFloat(activeAlert.latitude),
+                        longitude: parseFloat(activeAlert.longitude),
+                        accuracy: 10.0,
+                        timestamp: activeAlert.createdAt
+                    }]
+                });
+            }
             return res.status(200).json({
                 success: true,
                 count: 0,
@@ -232,6 +246,21 @@ exports.getSharedLocationHistory = async (req, res) => {
             order: [['timestamp', 'DESC']],
             limit: 50
         });
+
+        if (logs.length === 0 && activeAlert && activeAlert.latitude && activeAlert.longitude) {
+            return res.status(200).json({
+                success: true,
+                count: 1,
+                data: [{
+                    id: activeAlert.id,
+                    deviceId: activeAlert.deviceId,
+                    latitude: parseFloat(activeAlert.latitude),
+                    longitude: parseFloat(activeAlert.longitude),
+                    accuracy: 10.0,
+                    timestamp: activeAlert.createdAt
+                }]
+            });
+        }
 
         res.status(200).json({
             success: true,
