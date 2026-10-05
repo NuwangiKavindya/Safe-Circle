@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const TrustedContact = require('../models/TrustedContact');
 const User = require('../models/User');
 const Alert = require('../models/Alert');
@@ -282,11 +283,29 @@ exports.getSharedLocationHistory = async (req, res) => {
  */
 exports.triggerRemoteSiren = async (req, res) => {
     try {
-        const { deviceId, action } = req.body || {};
+        const { deviceId, action, targetUserId: explicitTargetUserId } = req.body || {};
         const sirenAction = action === 'STOP' ? 'STOP' : 'START';
 
         // Identify the target ward's userId
-        const targetUserId = req.isTracker ? req.trackerContact.userId : req.user.id;
+        let targetUserId = req.isTracker ? req.trackerContact.userId : req.user.id;
+        let triggeredByRole = req.isTracker ? 'GUARDIAN' : 'OWNER';
+
+        if (!req.isTracker && explicitTargetUserId && explicitTargetUserId !== req.user.id) {
+            // Check if req.user is an authorized trusted guardian for explicitTargetUserId
+            const contact = await TrustedContact.findOne({
+                where: {
+                    userId: explicitTargetUserId,
+                    [Op.or]: [
+                        { contactEmail: req.user.email },
+                        { contactPhone: req.user.phoneNumber }
+                    ]
+                }
+            });
+            if (contact) {
+                targetUserId = explicitTargetUserId;
+                triggeredByRole = 'GUARDIAN';
+            }
+        }
 
         // Resolve device
         let targetDeviceId = deviceId;
@@ -294,7 +313,7 @@ exports.triggerRemoteSiren = async (req, res) => {
         if (targetDeviceId) {
             device = await Device.findByPk(targetDeviceId);
         }
-        if (!device) {
+        if (!device && targetUserId) {
             device = await Device.findOne({
                 where: { userId: targetUserId },
                 order: [['updatedAt', 'DESC']]
@@ -309,7 +328,6 @@ exports.triggerRemoteSiren = async (req, res) => {
             });
         }
 
-        const triggeredByRole = req.isTracker ? 'GUARDIAN' : 'OWNER';
         const io = req.app.get('io');
         const payload = {
             deviceId: targetDeviceId,
@@ -323,8 +341,10 @@ exports.triggerRemoteSiren = async (req, res) => {
             if (targetDeviceId) {
                 io.to(`device-${targetDeviceId}`).emit('remote_siren_command', payload);
             }
-            io.to(`user-${targetUserId}`).emit('remote_siren_command', payload);
-            console.log(`[Remote Siren REST] 🔊 Siren ${sirenAction} broadcast for device ${targetDeviceId} (user ${targetUserId}) by ${triggeredByRole}`);
+            if (targetUserId) {
+                io.to(`user-${targetUserId}`).emit('remote_siren_command', payload);
+            }
+            console.log(`[Remote Siren REST] 🔊 Siren ${sirenAction} broadcast for ward ${targetUserId} (device: ${targetDeviceId}) by ${triggeredByRole}`);
         }
 
         res.status(200).json({

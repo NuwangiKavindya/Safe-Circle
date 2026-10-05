@@ -461,6 +461,10 @@
                 }
 
                 activeAccessCode = accessCode;
+                activeTrackerToken = resData.trackerSessionToken || null;
+                if (resData.data && resData.data.deviceId) {
+                    currentTargetDeviceId = resData.data.deviceId;
+                }
                 displayDashboard(resData.data);
             } catch (err) {
                 showError('Network error connecting to verification servers.');
@@ -499,7 +503,11 @@
         // Load historical coordinates
         async function loadLocationHistory() {
             try {
-                const response = await fetch(`/api/location/shared/${activeAccessCode}`);
+                const headers = {};
+                if (activeTrackerToken) {
+                    headers['Authorization'] = `Bearer ${activeTrackerToken}`;
+                }
+                const response = await fetch(`/api/contacts/shared/location/${activeAccessCode}`, { headers });
                 const resData = await response.json();
 
                 if (response.ok && resData.success && resData.data.length > 0) {
@@ -545,20 +553,17 @@
         }
 
         function initWebSocket(targetUserId) {
-            socket = io();
+            socket = io({
+                auth: { token: activeTrackerToken },
+                transports: ['websocket', 'polling']
+            });
 
             socket.on('connect', () => {
                 console.log("WebSocket connected. Subscribing to target devices.");
-                fetch(`/api/location/shared/${activeAccessCode}`)
-                    .then(res => res.json())
-                    .then(resData => {
-                        if (resData.success && resData.data.length > 0) {
-                            const deviceId = resData.data[0].deviceId;
-                            currentTargetDeviceId = deviceId;
-                            socket.emit('join-device-room', { deviceId });
-                            console.log(`Subscribed to device updates for device ID: ${deviceId}`);
-                        }
-                    });
+                if (currentTargetDeviceId) {
+                    socket.emit('join-device-room', { deviceId: currentTargetDeviceId });
+                    console.log(`Subscribed to device updates for device ID: ${currentTargetDeviceId}`);
+                }
             });
 
             // Listen to remote siren events from backend
@@ -568,19 +573,56 @@
                 updateSirenButtonUI();
             });
 
+            socket.on('remote_siren_ack', (ack) => {
+                console.log("Remote siren ack received:", ack);
+                if (ack && ack.action) {
+                    isRemoteSirenActive = ack.action === 'START';
+                    updateSirenButtonUI();
+                }
+            });
+
             // Hook up remote siren button click
             const sirenBtn = document.getElementById('remoteSirenBtn');
             if (sirenBtn) {
-                sirenBtn.onclick = () => {
-                    if (isRemoteSirenActive) {
-                        if (socket) {
-                            socket.emit('remote_trigger_siren', { deviceId: currentTargetDeviceId, action: 'STOP' });
+                sirenBtn.onclick = async () => {
+                    const action = isRemoteSirenActive ? 'STOP' : 'START';
+                    if (action === 'START') {
+                        if (!confirm("Blast emergency siren at 100% volume on target device?\n\nThis will override silent/vibrate mode to help locate the phone or deter an assailant.")) {
+                            return;
                         }
-                    } else {
-                        if (confirm("Blast emergency siren at 100% volume on target device?\n\nThis will override silent/vibrate mode to help locate the phone or deter an assailant.")) {
-                            if (socket) {
-                                socket.emit('remote_trigger_siren', { deviceId: currentTargetDeviceId, action: 'START' });
+                    }
+
+                    // 1. WebSocket real-time dispatch
+                    if (socket && socket.connected) {
+                        socket.emit('remote_trigger_siren', {
+                            deviceId: currentTargetDeviceId,
+                            targetUserId: targetUserId,
+                            action: action
+                        });
+                    }
+
+                    // 2. REST API fallback
+                    if (activeTrackerToken) {
+                        try {
+                            const res = await fetch('/api/contacts/shared/remote-siren', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${activeTrackerToken}`
+                                },
+                                body: JSON.stringify({
+                                    deviceId: currentTargetDeviceId,
+                                    targetUserId: targetUserId,
+                                    action: action
+                                })
+                            });
+                            const resData = await res.json();
+                            if (resData.success) {
+                                isRemoteSirenActive = resData.action === 'START';
+                                updateSirenButtonUI();
                             }
+                        } catch (e) {
+                            console.warn('[Track.html] Remote siren REST error:', e);
                         }
                     }
                 };
@@ -632,37 +674,22 @@
             map.setView(position, 16);
         }
 
-        // Fetch ambient audio if exists
+        // Fetch ambient audio & session updates via authenticated status endpoint
         async function checkAmbientAudio() {
+            if (!activeTrackerToken) return;
             try {
-                const response = await fetch('/api/contacts/shared/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ accessCode: activeAccessCode })
+                const response = await fetch('/api/contacts/shared/status', {
+                    headers: { 'Authorization': `Bearer ${activeTrackerToken}` }
                 });
 
                 const resData = await response.json();
-                if (response.ok && resData.success && resData.data.alertId) {
-                    // Let's fetch the alert detail to see if audioFileUrl exists
-                    const alertResponse = await fetch(`/api/alerts/active`, {
-                        headers: {
-                            // Note: activeAlerts endpoint is private, but we have verification endpoint payload.
-                            // To keep it simple, we check if alertId contains audio. Since alerts/active requires token,
-                            // we can make a public verify check return the audio URL as well.
-                            // Let's check verify response. In our verifyController, we can return the activeAlert details.
-                            // In our verifyController, activeAlert object has audioFileUrl.
-                            // Let's check verifyController verifyAccessCode code content. It returns isActiveSos and alertId, but not alert details directly.
-                            // Wait, does it return the full alert? Let's check. Yes, verifyController returns:
-                            // isActiveSos: !!activeAlert, alertId: activeAlert ? activeAlert.id : null.
-                            // Let's see if we can edit verifyController to return the audioFileUrl!
-                            // That way, we can display the audio card.
+                if (response.ok && resData.success && resData.data) {
+                    if (resData.data.deviceId && !currentTargetDeviceId) {
+                        currentTargetDeviceId = resData.data.deviceId;
+                        if (socket && socket.connected) {
+                            socket.emit('join-device-room', { deviceId: currentTargetDeviceId });
                         }
-                    });
-                    
-                    // Actually, let's look at the verify response. 
-                    // Let's request it from verifyAccessCode. Let's make sure our verifyController returns audioFileUrl.
-                    // Yes! We will edit verifyController to return it if it is present.
-                    // Let's see if the audio exists in the data returned by the POST verify request.
+                    }
                     if (resData.data.audioFileUrl) {
                         displayAudioCard(resData.data.audioFileUrl);
                     }

@@ -277,20 +277,9 @@ app.use('/api/sus', susRoutes);
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX: Rate-limit the public verify endpoint to prevent brute-force attacks.
 // Static access codes (6 digits = 900,000 combinations) are otherwise trivially
-// enumerable. This limiter allows 10 attempts per 15-minute window per IP.
-// ─────────────────────────────────────────────────────────────────────────────
-const verifyRateLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,   // 15-minute sliding window
-    max: 10,                     // max 10 attempts per IP per window
-    standardHeaders: true,
-    legacyHeaders: false,
-    skip: (req) => req.headers['x-test-bypass'] === 'skip-limiter',
-    message: {
-        success: false,
-        message: 'Too many verification attempts. Please wait 15 minutes before trying again.'
-    }
-});
-app.use('/api/contacts/shared', verifyRateLimiter, verifyRoutes);
+// Note: verifyRateLimiter is applied specifically to POST /api/contacts/shared/verify in verifyRoutes.js
+// so that authenticated polling (/status) and remote siren control are never throttled.
+app.use('/api/contacts/shared', verifyRoutes);
 
 // Haversine Distance helper for Geofence evaluation (meters)
 const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
@@ -544,10 +533,30 @@ io.on('connection', (socket) => {
     // Remote Siren Trigger: Guardian or Owner triggering audible alarm on ward's device
     socket.on('remote_trigger_siren', async (data) => {
         try {
-            const { deviceId, action } = data || {};
+            const { deviceId, action, targetUserId: explicitTargetUserId } = data || {};
             const sirenAction = action === 'STOP' ? 'STOP' : 'START';
-            const triggeredByRole = socket.authData.isTracker ? 'GUARDIAN' : 'OWNER';
-            const targetUserId = socket.authData.userId;
+            let triggeredByRole = socket.authData.isTracker ? 'GUARDIAN' : 'OWNER';
+            let targetUserId = socket.authData.userId;
+
+            // If a registered user is acting as guardian for another user
+            if (!socket.authData.isTracker && explicitTargetUserId && explicitTargetUserId !== socket.authData.userId) {
+                const callingUser = await User.findByPk(socket.authData.userId);
+                if (callingUser) {
+                    const isGuardian = await TrustedContact.findOne({
+                        where: {
+                            userId: explicitTargetUserId,
+                            [Op.or]: [
+                                { contactEmail: callingUser.email },
+                                { contactPhone: callingUser.phoneNumber }
+                            ]
+                        }
+                    });
+                    if (isGuardian) {
+                        targetUserId = explicitTargetUserId;
+                        triggeredByRole = 'GUARDIAN';
+                    }
+                }
+            }
 
             // Resolve target device
             let targetDeviceId = deviceId;
@@ -555,7 +564,7 @@ io.on('connection', (socket) => {
             if (targetDeviceId) {
                 device = await Device.findByPk(targetDeviceId);
             }
-            if (!device) {
+            if (!device && targetUserId) {
                 device = await Device.findOne({
                     where: { userId: targetUserId },
                     order: [['updatedAt', 'DESC']]
@@ -569,7 +578,7 @@ io.on('connection', (socket) => {
                 return socket.emit('error_message', { message: 'Unauthorized: No access to trigger remote siren on this device.' });
             }
 
-            console.log(`[Socket.IO] 🔊 Remote Siren ${sirenAction} command issued for device ${targetDeviceId} by ${triggeredByRole} (socket ${socket.id})`);
+            console.log(`[Socket.IO] 🔊 Remote Siren ${sirenAction} command issued for ward ${targetUserId} (device: ${targetDeviceId}) by ${triggeredByRole} (socket ${socket.id})`);
 
             const commandPayload = {
                 deviceId: targetDeviceId,
@@ -584,13 +593,19 @@ io.on('connection', (socket) => {
                 io.to(`device-${targetDeviceId}`).emit('remote_siren_command', commandPayload);
             }
             // Broadcast to user room (ensures device owner receives it immediately)
-            io.to(`user-${targetUserId}`).emit('remote_siren_command', commandPayload);
+            if (targetUserId) {
+                io.to(`user-${targetUserId}`).emit('remote_siren_command', commandPayload);
+            }
+
+            // Also emit to the sender socket so sender UI synchronizes immediately
+            socket.emit('remote_siren_command', commandPayload);
 
             // Acknowledge back to sender
             socket.emit('remote_siren_ack', {
                 success: true,
                 action: sirenAction,
                 deviceId: targetDeviceId,
+                targetUserId,
                 timestamp: commandPayload.timestamp
             });
         } catch (err) {

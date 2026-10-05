@@ -598,7 +598,8 @@ class ApiService {
   async triggerRemoteSiren(
     token: string,
     deviceId: string | undefined,
-    action: 'START' | 'STOP'
+    action: 'START' | 'STOP',
+    targetUserId?: string
   ): Promise<{ success: boolean; action?: string; message?: string }> {
     try {
       const response = await fetch(`${API_BASE_URL}/api/contacts/shared/remote-siren`, {
@@ -607,7 +608,7 @@ class ApiService {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ deviceId, action }),
+        body: JSON.stringify({ deviceId, action, targetUserId }),
       });
 
       const data = await response.json();

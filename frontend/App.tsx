@@ -109,7 +109,8 @@ const MainApp = () => {
   const [trackerReconnectTrigger, setTrackerReconnectTrigger] = useState<number>(0);
   const [trackerRemoteSirenActive, setTrackerRemoteSirenActive] = useState<boolean>(false);
   const [isRemoteSirenTriggeredByGuardian, setIsRemoteSirenTriggeredByGuardian] = useState<boolean>(false);
-  const socketRef = useRef<any>(null);
+  const wardSocketRef = useRef<any>(null);
+  const trackerSocketRef = useRef<any>(null);
 
   // Feedback Banner State
   const [loading, setLoading] = useState(false);
@@ -652,8 +653,8 @@ const MainApp = () => {
     } catch (e) {}
 
     const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : undefined;
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('remote_trigger_siren', {
+    if (wardSocketRef.current && wardSocketRef.current.connected) {
+      wardSocketRef.current.emit('remote_trigger_siren', {
         deviceId: targetDeviceId,
         action: 'STOP',
       });
@@ -695,8 +696,8 @@ const MainApp = () => {
     setLoading(false);
     if (loc) {
       setLiveLocation(loc);
-      if (socketRef.current && socketRef.current.connected) {
-        socketRef.current.emit('location_update', {
+      if (wardSocketRef.current && wardSocketRef.current.connected) {
+        wardSocketRef.current.emit('location_update', {
           deviceId: devices[0]?.id || '00000000-0000-0000-0000-000000000000',
           ...loc,
         });
@@ -707,47 +708,85 @@ const MainApp = () => {
     }
   };
 
+  // Persistent Ward Device Socket: stays connected across all screens while authenticated
+  // so remote sirens and emergency signals are received reliably at any time
+  useEffect(() => {
+    if (!token) {
+      if (wardSocketRef.current) {
+        wardSocketRef.current.disconnect();
+        wardSocketRef.current = null;
+      }
+      return;
+    }
+
+    console.log(`[Ward Socket] Initializing persistent ward connection to ${API_BASE_URL}`);
+    const socket = io(API_BASE_URL, {
+      transports: ['websocket', 'polling'],
+      forceNew: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 2000,
+      auth: { token },
+    });
+
+    socket.on('connect', () => {
+      console.log('[Ward Socket] Connected to server! Socket ID:', socket.id);
+      if (devices.length > 0 && devices[0]?.id) {
+        socket.emit('join-device-room', { deviceId: devices[0].id });
+      }
+    });
+
+    socket.on('remote_siren_command', (cmd: any) => {
+      console.log('[Ward Device Socket] 🚨 Received remote_siren_command:', cmd);
+      if (cmd && cmd.action === 'START') {
+        setIsRemoteSirenTriggeredByGuardian(true);
+        soundService.playSound('police_siren');
+        try {
+          Vibration.vibrate([0, 800, 300, 800], true);
+        } catch (e) {}
+      } else if (cmd && cmd.action === 'STOP') {
+        setIsRemoteSirenTriggeredByGuardian(false);
+        soundService.stopSound();
+        try {
+          Vibration.cancel();
+        } catch (e) {}
+      }
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('[Ward Socket] Connection error:', err.message);
+    });
+
+    wardSocketRef.current = socket;
+
+    return () => {
+      console.log('[Ward Socket] Disconnecting ward socket.');
+      socket.disconnect();
+      wardSocketRef.current = null;
+    };
+  }, [token]);
+
+  // Re-join device room if devices array updates
+  useEffect(() => {
+    if (wardSocketRef.current && wardSocketRef.current.connected && devices.length > 0 && devices[0]?.id) {
+      wardSocketRef.current.emit('join-device-room', { deviceId: devices[0].id });
+    }
+  }, [devices]);
+
   // Real-Time GPS location tracking using Google Fused Location Provider API & WebSockets
   useEffect(() => {
     if (token && currentScreen === 'DASHBOARD') {
       const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : '00000000-0000-0000-0000-000000000000';
       console.log(`[Fused Location Provider] Initializing live GPS tracking for device ID: ${targetDeviceId}`);
 
-      // Ensure Socket.IO client instance exists for socket emission
-      if (!socketRef.current) {
-        socketRef.current = io(API_BASE_URL, {
-          transports: ['websocket'],
-          forceNew: true,
-          auth: { token },
-        });
-      }
-
-      if (socketRef.current) {
-        socketRef.current.emit('join-device-room', { deviceId: targetDeviceId });
-
-        socketRef.current.off('remote_siren_command');
-        socketRef.current.on('remote_siren_command', (cmd: any) => {
-          console.log('[Ward Device Socket] 🚨 Received remote_siren_command:', cmd);
-          if (cmd && cmd.action === 'START') {
-            setIsRemoteSirenTriggeredByGuardian(true);
-            soundService.playSound('police_siren');
-            try {
-              Vibration.vibrate([0, 800, 300, 800], true);
-            } catch (e) {}
-          } else if (cmd && cmd.action === 'STOP') {
-            setIsRemoteSirenTriggeredByGuardian(false);
-            soundService.stopSound();
-            try {
-              Vibration.cancel();
-            } catch (e) {}
-          }
-        });
+      if (wardSocketRef.current && wardSocketRef.current.connected) {
+        wardSocketRef.current.emit('join-device-room', { deviceId: targetDeviceId });
       }
 
       locationService.startLocationTracking(
         targetDeviceId,
         token,
-        socketRef.current,
+        wardSocketRef.current,
         (location) => {
           setLiveLocation(location);
         }
@@ -755,14 +794,11 @@ const MainApp = () => {
 
       locationService.setTrackingMode(activeAlert ? 'EMERGENCY_SOS' : 'PASSIVE_MONITORING');
 
-      // FIX Phase 3: Subscribe to native FusedLocation events from MotionForegroundService.
-      // These events come from Kotlin via DeviceEventEmitter and keep flowing even when
-      // Android throttles the JS thread. They are dispatched over the same socket channel
-      // so the server receives a continuous stream regardless of screen/Doze state.
+      // Subscribe to native FusedLocation events from MotionForegroundService
       locationService.subscribeToNativeLocationUpdates(
         targetDeviceId,
         token,
-        socketRef.current,
+        wardSocketRef.current,
         (location) => setLiveLocation(location)
       );
     } else {
@@ -1143,18 +1179,19 @@ const MainApp = () => {
   }, [currentScreen, trackerInfo, trackerSessionToken]);
 
   useEffect(() => {
-    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo && trackerInfo.deviceId) {
+    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo) {
+      const tokenForSocket = trackerSessionToken || token;
       const deviceId = trackerInfo.deviceId;
-      console.log(`Connecting to WebSocket Server at ${API_BASE_URL} for device: ${deviceId}`);
+      console.log(`Connecting Tracker Socket to ${API_BASE_URL} (deviceId: ${deviceId})`);
       setTrackerConnectionStatus('RECONNECTING');
 
       const socket = io(API_BASE_URL, {
-        transports: ['websocket'],
+        transports: ['websocket', 'polling'],
         forceNew: true,
         reconnection: true,
         reconnectionAttempts: 20,
         reconnectionDelay: 2000,
-        auth: { token: trackerSessionToken },
+        auth: { token: tokenForSocket },
       });
 
       socket.on('connect_error', (err) => {
@@ -1171,9 +1208,11 @@ const MainApp = () => {
       });
 
       socket.on('connect', () => {
-        console.log('WebSocket Connected successfully! Joining device room:', deviceId);
+        console.log('Tracker WebSocket Connected successfully!');
         setTrackerConnectionStatus('CONNECTED');
-        socket.emit('join-device-room', { deviceId });
+        if (deviceId) {
+          socket.emit('join-device-room', { deviceId });
+        }
       });
 
       socket.on('location-broadcast', (newLog: any) => {
@@ -1202,22 +1241,29 @@ const MainApp = () => {
         }
       });
 
+      socket.on('remote_siren_ack', (ack: any) => {
+        console.log('[Tracker Socket] Received remote_siren_ack:', ack);
+        if (ack && ack.action) {
+          setTrackerRemoteSirenActive(ack.action === 'START');
+        }
+      });
+
       socket.on('disconnect', (reason) => {
-        console.log('WebSocket Disconnected:', reason);
+        console.log('Tracker WebSocket Disconnected:', reason);
         setTrackerConnectionStatus('OFFLINE');
       });
 
-      socketRef.current = socket;
+      trackerSocketRef.current = socket;
 
       return () => {
-        console.log('Cleaning up WebSocket connection for device:', deviceId);
+        console.log('Cleaning up Tracker WebSocket connection');
         if (socket) {
           socket.disconnect();
         }
-        socketRef.current = null;
+        trackerSocketRef.current = null;
       };
     }
-  }, [currentScreen, trackerInfo, trackerSessionToken, trackerReconnectTrigger]);
+  }, [currentScreen, trackerInfo, trackerSessionToken, token, trackerReconnectTrigger]);
 
   const handleReconnectTrackerSocket = () => {
     setTrackerConnectionStatus('RECONNECTING');
@@ -1229,12 +1275,14 @@ const MainApp = () => {
     const action = trigger ? 'START' : 'STOP';
     setTrackerRemoteSirenActive(trigger);
     const targetDeviceId = trackerInfo?.deviceId;
-    console.log(`[Tracker Remote Siren] Dispatching ${action} command for device: ${targetDeviceId}`);
+    const targetUserId = trackerInfo?.targetUser?.id;
+    console.log(`[Tracker Remote Siren] Dispatching ${action} command for device: ${targetDeviceId}, ward: ${targetUserId}`);
 
     // 1. Emit via active WebSocket
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('remote_trigger_siren', {
+    if (trackerSocketRef.current && trackerSocketRef.current.connected) {
+      trackerSocketRef.current.emit('remote_trigger_siren', {
         deviceId: targetDeviceId,
+        targetUserId,
         action,
       });
     }
@@ -1242,7 +1290,7 @@ const MainApp = () => {
     // 2. Redundant delivery via REST API fallback
     const authToken = trackerSessionToken || token;
     if (authToken) {
-      apiService.triggerRemoteSiren(authToken, targetDeviceId, action).catch(err => {
+      apiService.triggerRemoteSiren(authToken, targetDeviceId, action, targetUserId).catch(err => {
         console.warn('[Remote Siren REST Fallback Error]:', err.message);
       });
     }
