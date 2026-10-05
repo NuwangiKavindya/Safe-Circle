@@ -721,7 +721,7 @@ const MainApp = () => {
 
     console.log(`[Ward Socket] Initializing persistent ward connection to ${API_BASE_URL}`);
     const socket = io(API_BASE_URL, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       forceNew: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -1186,7 +1186,7 @@ const MainApp = () => {
       setTrackerConnectionStatus('RECONNECTING');
 
       const socket = io(API_BASE_URL, {
-        transports: ['websocket', 'polling'],
+        transports: ['polling', 'websocket'],
         forceNew: true,
         reconnection: true,
         reconnectionAttempts: 20,
