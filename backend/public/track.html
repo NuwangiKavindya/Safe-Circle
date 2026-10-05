@@ -555,11 +555,14 @@
         function initWebSocket(targetUserId) {
             socket = io({
                 auth: { token: activeTrackerToken },
-                transports: ['websocket', 'polling']
+                transports: ['polling', 'websocket']
             });
 
             socket.on('connect', () => {
-                console.log("WebSocket connected. Subscribing to target devices.");
+                console.log("WebSocket connected. Subscribing to target rooms.");
+                if (targetUserId) {
+                    socket.emit('join-tracker-room', { wardUserId: targetUserId });
+                }
                 if (currentTargetDeviceId) {
                     socket.emit('join-device-room', { deviceId: currentTargetDeviceId });
                     console.log(`Subscribed to device updates for device ID: ${currentTargetDeviceId}`);
@@ -692,6 +695,10 @@
                     }
                     if (resData.data.audioFileUrl) {
                         displayAudioCard(resData.data.audioFileUrl);
+                    }
+                    if (resData.data.isRemoteSirenActive !== undefined) {
+                        isRemoteSirenActive = !!resData.data.isRemoteSirenActive;
+                        updateSirenButtonUI();
                     }
                 }
             } catch (err) {

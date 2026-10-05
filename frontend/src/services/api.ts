@@ -238,6 +238,7 @@ export interface VerifyCodeResponse {
     alertId: string | null;
     deviceId?: string | null;
     audioFileUrl: string | null;
+    isRemoteSirenActive?: boolean;
   };
 }
 

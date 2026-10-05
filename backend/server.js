@@ -362,6 +362,46 @@ io.on('connection', (socket) => {
         console.log(`Socket ${socket.id} (Owner) joined user room: user-${socket.authData.userId}`);
     }
 
+    // Auto-join tracker room for verified trackers so they receive siren state & location broadcasts
+    if (socket.authData.isTracker && socket.authData.userId) {
+        socket.join(`tracker-${socket.authData.userId}`);
+        console.log(`Socket ${socket.id} (Tracker) joined tracker room: tracker-${socket.authData.userId}`);
+    }
+
+    // Join tracker room event for guardians
+    socket.on('join-tracker-room', async (data) => {
+        try {
+            const { wardUserId } = data || {};
+            if (!wardUserId) return;
+
+            let authorized = false;
+            if (socket.authData.isTracker && socket.authData.userId === wardUserId) {
+                authorized = true;
+            } else if (!socket.authData.isTracker && socket.authData.userId) {
+                const callingUser = await User.findByPk(socket.authData.userId);
+                if (callingUser) {
+                    const isGuardian = await TrustedContact.findOne({
+                        where: {
+                            userId: wardUserId,
+                            [Op.or]: [
+                                { contactEmail: callingUser.email },
+                                { contactPhone: callingUser.phoneNumber }
+                            ]
+                        }
+                    });
+                    if (isGuardian) authorized = true;
+                }
+            }
+
+            if (authorized) {
+                socket.join(`tracker-${wardUserId}`);
+                console.log(`Socket ${socket.id} joined tracker room: tracker-${wardUserId}`);
+            }
+        } catch (err) {
+            console.error('[Socket.IO] Error in join-tracker-room:', err.message);
+        }
+    });
+
     // Join device room to receive location updates for a specific device
     socket.on('join-device-room', async (data) => {
         try {
@@ -419,8 +459,15 @@ io.on('connection', (socket) => {
                 timestamp: timestamp || new Date().toISOString()
             };
 
-            // 1. Broadcast immediately to any connected trusted contact watching this device room
-            io.to(`device-${deviceId}`).emit('location-broadcast', payload);
+            // 1. Broadcast immediately to any connected trusted contact watching this device room or ward tracker room
+            if (deviceId) {
+                io.to(`device-${deviceId}`).emit('location-broadcast', payload);
+            }
+            if (device && device.userId) {
+                io.to(`tracker-${device.userId}`).emit('location-broadcast', payload);
+            } else if (socket.authData.userId) {
+                io.to(`tracker-${socket.authData.userId}`).emit('location-broadcast', payload);
+            }
 
             // 2. Asynchronously persist location log to database
             try {
@@ -580,6 +627,9 @@ io.on('connection', (socket) => {
 
             console.log(`[Socket.IO] 🔊 Remote Siren ${sirenAction} command issued for ward ${targetUserId} (device: ${targetDeviceId}) by ${triggeredByRole} (socket ${socket.id})`);
 
+            global.activeSirenState = global.activeSirenState || new Map();
+            global.activeSirenState.set(targetUserId, sirenAction === 'START');
+
             const commandPayload = {
                 deviceId: targetDeviceId,
                 userId: targetUserId,
@@ -595,6 +645,8 @@ io.on('connection', (socket) => {
             // Broadcast to user room (ensures device owner receives it immediately)
             if (targetUserId) {
                 io.to(`user-${targetUserId}`).emit('remote_siren_command', commandPayload);
+                // Broadcast to tracker room (ensures all guardians tracking this ward see updated state)
+                io.to(`tracker-${targetUserId}`).emit('remote_siren_command', commandPayload);
             }
 
             // Also emit to the sender socket so sender UI synchronizes immediately

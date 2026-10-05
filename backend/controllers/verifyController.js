@@ -149,6 +149,9 @@ exports.getTrackerSessionStatus = async (req, res) => {
             if (userDevice) deviceId = userDevice.id;
         }
 
+        global.activeSirenState = global.activeSirenState || new Map();
+        const isRemoteSirenActive = !!global.activeSirenState.get(contact.userId);
+
         res.status(200).json({
             success: true,
             data: {
@@ -163,7 +166,8 @@ exports.getTrackerSessionStatus = async (req, res) => {
                 isActiveSos: !!activeAlert,
                 alertId: activeAlert ? activeAlert.id : null,
                 deviceId: deviceId,
-                audioFileUrl: activeAlert ? activeAlert.audioFileUrl : null
+                audioFileUrl: activeAlert ? activeAlert.audioFileUrl : null,
+                isRemoteSirenActive: isRemoteSirenActive
             }
         });
     } catch (error) {
@@ -328,6 +332,9 @@ exports.triggerRemoteSiren = async (req, res) => {
             });
         }
 
+        global.activeSirenState = global.activeSirenState || new Map();
+        global.activeSirenState.set(targetUserId, sirenAction === 'START');
+
         const io = req.app.get('io');
         const payload = {
             deviceId: targetDeviceId,
@@ -343,6 +350,7 @@ exports.triggerRemoteSiren = async (req, res) => {
             }
             if (targetUserId) {
                 io.to(`user-${targetUserId}`).emit('remote_siren_command', payload);
+                io.to(`tracker-${targetUserId}`).emit('remote_siren_command', payload);
             }
             console.log(`[Remote Siren REST] 🔊 Siren ${sirenAction} broadcast for ward ${targetUserId} (device: ${targetDeviceId}) by ${triggeredByRole}`);
         }

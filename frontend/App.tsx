@@ -653,14 +653,16 @@ const MainApp = () => {
     } catch (e) {}
 
     const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : undefined;
+    const targetUserId = user?.id;
     if (wardSocketRef.current && wardSocketRef.current.connected) {
       wardSocketRef.current.emit('remote_trigger_siren', {
         deviceId: targetDeviceId,
+        targetUserId,
         action: 'STOP',
       });
     }
     if (token) {
-      apiService.triggerRemoteSiren(token, targetDeviceId, 'STOP').catch(err => {
+      apiService.triggerRemoteSiren(token, targetDeviceId, 'STOP', targetUserId).catch(err => {
         console.warn('[Remote Siren Silence Error]:', err.message);
       });
     }
@@ -740,7 +742,9 @@ const MainApp = () => {
       console.log('[Ward Device Socket] 🚨 Received remote_siren_command:', cmd);
       if (cmd && cmd.action === 'START') {
         setIsRemoteSirenTriggeredByGuardian(true);
-        soundService.playSound('police_siren');
+        soundService.getSelectedSound().then(preferred => {
+          soundService.playSound(preferred || 'police_siren');
+        });
         try {
           Vibration.vibrate([0, 800, 300, 800], true);
         } catch (e) {}
@@ -1145,7 +1149,7 @@ const MainApp = () => {
 
   useEffect(() => {
     let intervalId: any = null;
-    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo && trackerSessionToken) {
+    if (currentScreen === 'TRACKER_DASHBOARD' && trackerSessionToken) {
       const pollTrackerUpdates = async () => {
         // Authenticated polling using 2-hour Tracker Session JWT
         const statusRes = await apiService.getTrackerSessionStatus(trackerSessionToken);
@@ -1161,6 +1165,9 @@ const MainApp = () => {
             return;
           }
           setTrackerInfo(statusRes.data);
+          if (statusRes.data.isRemoteSirenActive !== undefined) {
+            setTrackerRemoteSirenActive(statusRes.data.isRemoteSirenActive);
+          }
           if (statusRes.data.isActiveSos) {
             setTrackerConnectionStatus('CONNECTED');
           }
@@ -1176,13 +1183,15 @@ const MainApp = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [currentScreen, trackerInfo, trackerSessionToken]);
+  }, [currentScreen, trackerSessionToken]);
+
+  const trackedWardId = trackerInfo?.targetUser?.id;
+  const trackedDeviceId = trackerInfo?.deviceId;
 
   useEffect(() => {
-    if (currentScreen === 'TRACKER_DASHBOARD' && trackerInfo) {
+    if (currentScreen === 'TRACKER_DASHBOARD' && (trackerSessionToken || token)) {
       const tokenForSocket = trackerSessionToken || token;
-      const deviceId = trackerInfo.deviceId;
-      console.log(`Connecting Tracker Socket to ${API_BASE_URL} (deviceId: ${deviceId})`);
+      console.log(`Connecting Tracker Socket to ${API_BASE_URL} (wardId: ${trackedWardId}, deviceId: ${trackedDeviceId})`);
       setTrackerConnectionStatus('RECONNECTING');
 
       const socket = io(API_BASE_URL, {
@@ -1208,10 +1217,13 @@ const MainApp = () => {
       });
 
       socket.on('connect', () => {
-        console.log('Tracker WebSocket Connected successfully!');
+        console.log('Tracker WebSocket Connected successfully! Socket ID:', socket.id);
         setTrackerConnectionStatus('CONNECTED');
-        if (deviceId) {
-          socket.emit('join-device-room', { deviceId });
+        if (trackedWardId) {
+          socket.emit('join-tracker-room', { wardUserId: trackedWardId });
+        }
+        if (trackedDeviceId) {
+          socket.emit('join-device-room', { deviceId: trackedDeviceId });
         }
       });
 
@@ -1263,7 +1275,19 @@ const MainApp = () => {
         trackerSocketRef.current = null;
       };
     }
-  }, [currentScreen, trackerInfo, trackerSessionToken, token, trackerReconnectTrigger]);
+  }, [currentScreen, trackerSessionToken, token, trackerReconnectTrigger, trackedWardId]);
+
+  // Dynamically join device & tracker room if deviceId or wardId updates without reconnecting socket
+  useEffect(() => {
+    if (trackerSocketRef.current && trackerSocketRef.current.connected) {
+      if (trackedWardId) {
+        trackerSocketRef.current.emit('join-tracker-room', { wardUserId: trackedWardId });
+      }
+      if (trackedDeviceId) {
+        trackerSocketRef.current.emit('join-device-room', { deviceId: trackedDeviceId });
+      }
+    }
+  }, [trackedDeviceId, trackedWardId]);
 
   const handleReconnectTrackerSocket = () => {
     setTrackerConnectionStatus('RECONNECTING');
