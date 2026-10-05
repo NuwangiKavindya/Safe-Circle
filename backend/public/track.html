@@ -357,6 +357,11 @@
                     <div class="info-title">Current Coordinates</div>
                     <div class="info-value" id="currentLocationText">Waiting...</div>
                     <div class="info-subtitle" id="locationAccuracyText">Accuracy: --</div>
+                    <div style="margin-top: 10px;">
+                        <a id="openGoogleMapsBtn" href="#" target="_blank" rel="noopener noreferrer" style="display: none; padding: 7px 12px; background: rgba(56, 189, 248, 0.12); border: 1px solid #38bdf8; color: #38bdf8; border-radius: 8px; font-size: 12px; font-weight: 700; text-decoration: none; align-items: center; gap: 6px; width: fit-content; transition: background 0.2s;">
+                            <span>🗺️</span> Open in Google Maps ↗
+                        </a>
+                    </div>
                 </div>
 
                 <!-- Last Update details -->
@@ -674,11 +679,28 @@
 
             const position = [lat, lng];
             
+            // Update Google Maps external link
+            const gmapsBtn = document.getElementById('openGoogleMapsBtn');
+            if (gmapsBtn) {
+                gmapsBtn.href = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+                gmapsBtn.style.display = 'inline-flex';
+            }
+
             // Adjust marker positions
+            const popupContent = `
+                <div style="font-family: inherit; font-size: 13px; line-height: 1.4;">
+                    <strong style="color: #0f172a;">Live Target Location</strong><br/>
+                    <span style="color: #64748b;">${lat.toFixed(5)}, ${lng.toFixed(5)}</span><br/>
+                    <span style="color: #10b981; font-weight: 600;">±${accuracy ? parseFloat(accuracy).toFixed(1) : 10}m accuracy</span><br/>
+                    <a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener noreferrer" style="display: inline-block; margin-top: 6px; color: #2563eb; font-weight: 700; text-decoration: none;">🗺️ Open in Google Maps ↗</a>
+                </div>
+            `;
+
             if (latestMarker) {
                 latestMarker.setLatLng(position);
+                latestMarker.setPopupContent(popupContent);
             } else {
-                latestMarker = L.marker(position).addTo(map);
+                latestMarker = L.marker(position).addTo(map).bindPopup(popupContent);
             }
 
             // Adjust view zoom

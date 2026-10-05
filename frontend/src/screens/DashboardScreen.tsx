@@ -10,6 +10,7 @@ import {
   Switch,
   Alert,
   RefreshControl,
+  Linking,
 } from 'react-native';
 import { DeviceCard } from '../components/DeviceCard';
 import { ContactCard } from '../components/ContactCard';
@@ -353,6 +354,27 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionHeading}>Live Geolocation Map</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              style={[styles.addButtonMini, { marginRight: 6, backgroundColor: COLORS.cardBg, borderColor: '#38BDF8' }]}
+              onPress={() => {
+                if (primaryLat != null && primaryLng != null && !isNaN(primaryLat) && !isNaN(primaryLng)) {
+                  const label = encodeURIComponent(user?.fullName || 'Current Location');
+                  const geoUrl = `geo:${primaryLat},${primaryLng}?q=${primaryLat},${primaryLng}(${label})`;
+                  const webUrl = `https://www.google.com/maps/search/?api=1&query=${primaryLat},${primaryLng}`;
+                  Linking.canOpenURL(geoUrl).then(can => {
+                    if (can) {
+                      Linking.openURL(geoUrl);
+                    } else {
+                      Linking.openURL(webUrl);
+                    }
+                  }).catch(() => Linking.openURL(webUrl));
+                } else {
+                  Alert.alert('Location Pending', 'GPS coordinates are being acquired...');
+                }
+              }}
+            >
+              <Text style={[styles.addButtonMiniText, { color: '#38BDF8' }]}>🗺️ Google Maps</Text>
+            </TouchableOpacity>
             {onFetchCurrentLocation && (
               <TouchableOpacity
                 style={[styles.addButtonMini, { marginRight: 6, backgroundColor: COLORS.cardBg, borderColor: COLORS.accentGreen }]}

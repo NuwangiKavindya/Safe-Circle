@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Linking,
 } from 'react-native';
 import { MapViewComponent } from '../components/MapViewComponent';
 import { globalStyles, COLORS } from '../styles/theme';
@@ -341,6 +342,28 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
               <Text style={{ color: '#F87171', fontSize: 12, fontWeight: '700' }}>📷 AR Vision</Text>
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={[styles.mapActionBtn, { backgroundColor: COLORS.cardBg, borderColor: '#38BDF8' }]}
+            onPress={() => {
+              if (currentLat != null && currentLng != null && !isNaN(currentLat) && !isNaN(currentLng)) {
+                const label = encodeURIComponent(trackerInfo?.targetUser?.fullName || 'Ward Location');
+                const geoUrl = `geo:${currentLat},${currentLng}?q=${currentLat},${currentLng}(${label})`;
+                const webUrl = `https://www.google.com/maps/search/?api=1&query=${currentLat},${currentLng}`;
+                Linking.canOpenURL(geoUrl).then(can => {
+                  if (can) {
+                    Linking.openURL(geoUrl);
+                  } else {
+                    Linking.openURL(webUrl);
+                  }
+                }).catch(() => Linking.openURL(webUrl));
+              } else {
+                Alert.alert('Location Pending', 'Waiting for location coordinates from ward device...');
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={{ color: '#38BDF8', fontSize: 12, fontWeight: '700' }}>🗺️ Google Maps</Text>
+          </TouchableOpacity>
           {onNavigateFullScreenMap && (
             <TouchableOpacity
               style={[styles.mapActionBtn, { backgroundColor: COLORS.indigoBg, borderColor: COLORS.accentCyan }]}

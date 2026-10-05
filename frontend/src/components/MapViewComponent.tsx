@@ -10,6 +10,7 @@ import {
   TextInput,
   Alert,
   Modal,
+  Linking,
 } from 'react-native';
 import {
   Map,
@@ -216,6 +217,38 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
   };
 
   /**
+   * OPEN IN GOOGLE MAPS APP
+   * Seamless alternative option to launch the coordinates in the external Google Maps app or browser
+   */
+  const handleOpenGoogleMaps = async () => {
+    if (latitude === null || longitude === null || isNaN(latitude) || isNaN(longitude)) {
+      Alert.alert('Location Required', 'GPS coordinates are not available yet.');
+      return;
+    }
+
+    const geoUrl = `geo:${latitude},${longitude}?q=${latitude},${longitude}(${encodeURIComponent(targetName)})`;
+    const webUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+
+    try {
+      if (Platform.OS === 'android') {
+        const canOpen = await Linking.canOpenURL(geoUrl);
+        if (canOpen) {
+          await Linking.openURL(geoUrl);
+          return;
+        }
+      }
+      await Linking.openURL(webUrl);
+    } catch (err) {
+      console.warn('[MapViewComponent] Error launching Google Maps URL:', err);
+      try {
+        await Linking.openURL(webUrl);
+      } catch (fallbackErr) {
+        Alert.alert('Unable to open map', 'Could not open Google Maps on this device.');
+      }
+    }
+  };
+
+  /**
    * AUTOMATIC CAMERA RE-CENTERING ON LOAD & COORDINATE RESOLUTION
    * Immediately flies in to street-level zoom (default 16.5) centered on the user's location.
    */
@@ -364,12 +397,17 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
 
       {/* 1. Top Live GPS Info Badge for Embedded Mode */}
       {!isFullScreen && (
-        <View style={[styles.mapOverlayBadge, { backgroundColor: activeTheme.mapOverlayGlass, borderColor: activeTheme.borderDark }, onBack ? { top: 52 } : null]}>
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={handleOpenGoogleMaps}
+          style={[styles.mapOverlayBadge, { backgroundColor: activeTheme.mapOverlayGlass, borderColor: activeTheme.borderDark }, onBack ? { top: 52 } : null]}
+        >
           <View style={[styles.livePulseDot, isFinalApproach && styles.pulseDotRadar]} />
           <Text style={[styles.mapOverlayText, { color: activeTheme.textPrimary }]}>
             LIVE GPS • {targetName} • {latitude.toFixed(5)}, {longitude.toFixed(5)} (±{accuracy ? accuracy.toFixed(1) : '10'}m)
           </Text>
-        </View>
+          <Text style={{ fontSize: 10, color: activeTheme.accentCyan, marginLeft: 6, fontWeight: '700' }}>🗺️ Maps ↗</Text>
+        </TouchableOpacity>
       )}
 
       {/* 2. FINAL APPROACH RADAR SLIM MICRO-PILL BADGE (STACKED CLEANLY BELOW GPS BADGE) */}
@@ -714,6 +752,14 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
                 <Text style={styles.bottomSheetBtnIcon}>📥</Text>
                 <Text style={[styles.bottomSheetBtnText, { color: activeTheme.mapControlBtnText }]}>Offline Pack</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bottomSheetBtn, { backgroundColor: activeTheme.mapControlBtnBg, borderColor: activeTheme.mapControlBtnBorder }]}
+                onPress={handleOpenGoogleMaps}
+                accessibilityLabel="Open in Google Maps"
+              >
+                <Text style={styles.bottomSheetBtnIcon}>🗺️</Text>
+                <Text style={[styles.bottomSheetBtnText, { color: activeTheme.mapControlBtnText }]}>Google Maps</Text>
+              </TouchableOpacity>
             </View>
           </View>
         ) : (
@@ -732,6 +778,13 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
                 <Text style={styles.controlBtnIcon}>⛶</Text>
               </TouchableOpacity>
             )}
+            <TouchableOpacity
+              style={[styles.controlBtn, { backgroundColor: activeTheme.mapControlBtnBg, borderColor: activeTheme.mapControlBtnBorder }]}
+              onPress={handleOpenGoogleMaps}
+              accessibilityLabel="Open in Google Maps"
+            >
+              <Text style={styles.controlBtnIcon}>🗺️</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.controlBtn, { backgroundColor: activeTheme.mapControlBtnBg, borderColor: activeTheme.mapControlBtnBorder }]}
               onPress={() => {
