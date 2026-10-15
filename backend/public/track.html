@@ -453,8 +453,14 @@
         let pathLine;
         let latestMarker;
         let activeAccessCode = '';
-        let socket;
+        let activeTrackerToken = null;
+        let currentTargetDeviceId = null;
+        let currentTargetUserId = null;
+        let isRemoteSirenActive = false;
+        let socket = null;
         let audioPlayer = null;
+        let audioPollInterval = null;
+        let currentLoadedAudioUrl = null;
 
         // Auto-extract access code and TOTP from URL parameters
         window.onload = () => {
@@ -553,8 +559,9 @@
 
                 activeAccessCode = accessCode;
                 activeTrackerToken = resData.trackerSessionToken || null;
-                if (resData.data && resData.data.deviceId) {
-                    currentTargetDeviceId = resData.data.deviceId;
+                if (resData.data) {
+                    if (resData.data.deviceId) currentTargetDeviceId = resData.data.deviceId;
+                    if (resData.data.targetUser) currentTargetUserId = resData.data.targetUser.id;
                 }
                 displayDashboard(resData.data);
             } catch (err) {
@@ -575,6 +582,13 @@
             document.getElementById('authView').style.display = 'none';
             document.getElementById('dashboardView').style.display = 'flex';
 
+            if (data.targetUser) {
+                currentTargetUserId = data.targetUser.id;
+            }
+            if (data.deviceId) {
+                currentTargetDeviceId = data.deviceId;
+            }
+
             // Fill User details
             document.getElementById('targetUserName').innerText = data.targetUser.fullName;
             document.getElementById('targetUserPhone').innerText = `📱 ${data.targetUser.phoneNumber || 'Unavailable'}`;
@@ -590,7 +604,7 @@
             await loadLocationHistory();
 
             // Connect WebSocket socket connection
-            initWebSocket(data.targetUser.id);
+            initWebSocket(currentTargetUserId);
         }
 
         // Load historical coordinates
@@ -626,9 +640,7 @@
             }
         }
 
-        // Initialize socket.io connection
-        let currentTargetDeviceId = null;
-        let isRemoteSirenActive = false;
+        // Initialize socket.io connection and siren controls
 
         function updateSirenButtonUI() {
             const sirenBtn = document.getElementById('remoteSirenBtn');
@@ -646,6 +658,7 @@
         }
 
         function initWebSocket(targetUserId) {
+            currentTargetUserId = targetUserId || currentTargetUserId;
             socket = io({
                 auth: { token: activeTrackerToken },
                 transports: ['polling', 'websocket']
@@ -653,8 +666,8 @@
 
             socket.on('connect', () => {
                 console.log("WebSocket connected. Subscribing to target rooms.");
-                if (targetUserId) {
-                    socket.emit('join-tracker-room', { wardUserId: targetUserId });
+                if (currentTargetUserId) {
+                    socket.emit('join-tracker-room', { wardUserId: currentTargetUserId });
                 }
                 if (currentTargetDeviceId) {
                     socket.emit('join-device-room', { deviceId: currentTargetDeviceId });
@@ -692,7 +705,7 @@
                     if (socket && socket.connected) {
                         socket.emit('remote_trigger_siren', {
                             deviceId: currentTargetDeviceId,
-                            targetUserId: targetUserId,
+                            targetUserId: currentTargetUserId,
                             action: action
                         });
                     }
@@ -708,7 +721,7 @@
                                 },
                                 body: JSON.stringify({
                                     deviceId: currentTargetDeviceId,
-                                    targetUserId: targetUserId,
+                                    targetUserId: currentTargetUserId,
                                     action: action
                                 })
                             });
@@ -753,7 +766,10 @@
             });
 
             // Periodically check if audio recording is uploaded
-            setInterval(checkAmbientAudio, 10000);
+            if (audioPollInterval) {
+                clearInterval(audioPollInterval);
+            }
+            audioPollInterval = setInterval(checkAmbientAudio, 10000);
             checkAmbientAudio();
         }
 
@@ -803,6 +819,14 @@
                     headers: { 'Authorization': `Bearer ${activeTrackerToken}` }
                 });
 
+                if (response.status === 401) {
+                    if (audioPollInterval) {
+                        clearInterval(audioPollInterval);
+                        audioPollInterval = null;
+                    }
+                    return;
+                }
+
                 const resData = await response.json();
                 if (response.ok && resData.success && resData.data) {
                     if (resData.data.deviceId && !currentTargetDeviceId) {
@@ -824,7 +848,6 @@
             }
         }
 
-        let currentLoadedAudioUrl = null;
         function displayAudioCard(url) {
             const card = document.getElementById('audioCard');
             const playBtn = document.getElementById('playAudioBtn');

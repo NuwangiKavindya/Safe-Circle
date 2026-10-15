@@ -139,12 +139,39 @@ class MotionForegroundService : Service(), SensorEventListener {
         const val NOTIFICATION_ID         = 28867
         const val ACTION_START            = "ACTION_START_MOTION_GUARD"
         const val ACTION_STOP             = "ACTION_STOP_MOTION_GUARD"
+        const val ACTION_START_ALARM      = "ACTION_START_NATIVE_ALARM"
         const val ACTION_STOP_ALARM       = "ACTION_STOP_NATIVE_ALARM"
         const val ACTION_SET_TRACKING_MODE = "ACTION_SET_TRACKING_MODE"
         const val EXTRA_SENSITIVITY_MODE  = "EXTRA_SENSITIVITY_MODE"
         const val EXTRA_TRACKING_MODE     = "EXTRA_TRACKING_MODE"
         var isServiceRunning: Boolean = false
         var activeReactContext: ReactContext? = null
+
+        /**
+         * Weak reference to the currently-running service instance.
+         * Populated in onCreate(), cleared in stopForegroundService().
+         * Used by stopAlarmDirectly() and triggerAlarmDirectly() so the JS bridge
+         * or native FCM service can control the nativeToneGenerator without an IPC round-trip.
+         */
+        @Volatile
+        private var instance: java.lang.ref.WeakReference<MotionForegroundService>? = null
+
+        /**
+         * Called to trigger the service's internal nativeToneGenerator immediately
+         * and in-process. Safe to call even if the service is not running (no-op).
+         */
+        fun triggerAlarmDirectly(reason: String = "Remote Siren Triggered") {
+            instance?.get()?.triggerNativeAlarm(reason)
+        }
+
+        /**
+         * Called by MotionGuardModule.stopNativeAlarm() to silence the service's
+         * internal nativeToneGenerator immediately and in-process.
+         * Safe to call even if the service is not running (no-op).
+         */
+        fun stopAlarmDirectly() {
+            instance?.get()?.stopNativeAlarm()
+        }
     }
 
     // =========================================================================
@@ -153,6 +180,9 @@ class MotionForegroundService : Service(), SensorEventListener {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Register this instance so stopAlarmDirectly() can reach it in-process.
+        instance = java.lang.ref.WeakReference(this)
 
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -211,6 +241,27 @@ class MotionForegroundService : Service(), SensorEventListener {
                 stopForegroundService()
                 return START_NOT_STICKY
             }
+            ACTION_START_ALARM -> {
+                createNotificationChannel()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    } else {
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    }
+                    startForeground(NOTIFICATION_ID, createNotification(), type)
+                } else {
+                    startForeground(NOTIFICATION_ID, createNotification())
+                }
+                triggerNativeAlarm("Remote Siren Command Received via Push")
+                isServiceRunning = true
+                return START_STICKY
+            }
             ACTION_STOP_ALARM -> {
                 stopNativeAlarm()
                 return START_NOT_STICKY
@@ -228,7 +279,11 @@ class MotionForegroundService : Service(), SensorEventListener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             } else {
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
@@ -278,7 +333,7 @@ class MotionForegroundService : Service(), SensorEventListener {
      * Native Catalyst/JS instance to be alive. Called as the PRIMARY action
      * when a theft anomaly is detected.
      */
-    private fun triggerNativeAlarm(reason: String) {
+    internal fun triggerNativeAlarm(reason: String) {
         if (nativeAlarmActive) return
         nativeAlarmActive = true
 
@@ -310,7 +365,9 @@ class MotionForegroundService : Service(), SensorEventListener {
         nativeAlarmHandler.post(nativeAlarmRunnable!!)
     }
 
-    private fun stopNativeAlarm() {
+    // `internal` visibility: accessible from the companion object's stopAlarmDirectly()
+    // and from within this class. Not exposed to other packages.
+    internal fun stopNativeAlarm() {
         nativeAlarmActive = false
         nativeAlarmRunnable?.let { nativeAlarmHandler.removeCallbacks(it) }
         nativeAlarmRunnable = null
@@ -319,6 +376,7 @@ class MotionForegroundService : Service(), SensorEventListener {
             nativeToneGenerator?.release()
         } catch (e: Exception) { /* ignore */ }
         nativeToneGenerator = null
+        android.util.Log.d("MotionForegroundService", "🔕 Native alarm ToneGenerator stopped.")
     }
 
     // =========================================================================
@@ -448,6 +506,9 @@ class MotionForegroundService : Service(), SensorEventListener {
         }
 
         isServiceRunning = false
+        // Clear the companion weak reference so stopAlarmDirectly() becomes a no-op
+        // after the service has fully torn down.
+        instance = null
         try {
             tfliteInterpreter?.close()
             tfliteInterpreter = null

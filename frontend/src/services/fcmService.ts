@@ -1,5 +1,6 @@
 import { PermissionsAndroid, Platform } from 'react-native';
 import { apiService } from './api';
+import { soundService } from './soundService';
 
 let messagingModule: any = null;
 try {
@@ -88,7 +89,18 @@ class FcmService {
 
     // C. Foreground Notification Receiver
     this.unsubscribeForeground = messagingModule().onMessage(async (remoteMessage: any) => {
-      console.log('[FcmService] 🚨 Foreground FCM Message received:', remoteMessage.notification?.title);
+      console.log('[FcmService] 🚨 Foreground FCM Message received:', remoteMessage.notification?.title || remoteMessage.data);
+      const data = remoteMessage.data;
+      if (data && (data.type === 'REMOTE_SIREN' || data.alarm_action)) {
+        const action = data.alarm_action || data.action;
+        if (action === 'START') {
+          soundService.getSelectedSound().then(preferred => {
+            soundService.playAllAlarms(preferred || 'police_siren');
+          });
+        } else if (action === 'STOP') {
+          soundService.stopAllAlarms();
+        }
+      }
     });
   }
 

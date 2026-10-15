@@ -122,8 +122,20 @@ exports.googleLogin = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Missing idToken' });
     }
 
-    // Sandbox bypass for testing Google Login in development without native setup
-    if ((idToken.startsWith('sandbox-google-token-') || idToken.startsWith('sandbox-google-token:::')) && process.env.NODE_ENV !== 'production') {
+    // Sandbox token handling for offline development
+    const isSandboxToken = typeof idToken === 'string' &&
+        (idToken.startsWith('sandbox-google-token-') || idToken.startsWith('sandbox-google-token:::'));
+
+    if (isSandboxToken) {
+        // CRITICAL SECURITY FIX: Gate sandbox backdoor behind an explicit opt-in flag.
+        // Prohibit sandbox authentication in production or whenever ENABLE_AUTH_SANDBOX is not explicitly 'true'.
+        if (process.env.NODE_ENV === 'production' || process.env.ENABLE_AUTH_SANDBOX !== 'true') {
+            return res.status(401).json({
+                success: false,
+                message: 'Authentication failed: Sandbox tokens are disabled on this server.'
+            });
+        }
+
         try {
             let email, name;
             if (idToken.includes(':::')) {
@@ -135,6 +147,8 @@ exports.googleLogin = async (req, res) => {
                 email = parts[3];
                 name = parts.slice(4).join('-') || email.split('@')[0];
             }
+
+            console.warn(`[SECURITY WARNING] Sandbox authentication bypass used for email: ${email}`);
             const googleId = `sandbox-${email}`;
 
             let user = await User.findOne({ where: { email } });

@@ -5,6 +5,8 @@ const Alert = require('../models/Alert');
 const Device = require('../models/Device');
 const LocationLog = require('../models/LocationLog');
 const { verifyToken } = require('../utils/totp');
+const { isTokenConsumed, markTokenConsumed } = require('../utils/totpReplayCache');
+const { sendRemoteSirenPushNotification } = require('../services/pushService');
 const jwt = require('jsonwebtoken');
 
 /**
@@ -70,7 +72,22 @@ exports.verifyAccessCode = async (req, res) => {
             return res.status(401).json(AUTH_FAILURE);
         }
 
-        // 2. RFC 6238 TOTP validation
+        // 2. Anti-Replay Check (RFC 6238 Section 5.2):
+        //    Ensure a 6-digit TOTP token cannot be replayed within its 90s validity window.
+        const isReplayed = isTokenConsumed(contact.id, cleanTotpToken) ||
+            (contact.lastUsedTotpToken === cleanTotpToken &&
+             contact.lastTotpUsedAt &&
+             (Date.now() - new Date(contact.lastTotpUsedAt).getTime()) < 120000);
+
+        if (isReplayed) {
+            console.warn(`[Security Alert] 🚨 Blocked replay attack for contact ${contact.id} using token ${cleanTotpToken}`);
+            return res.status(401).json({
+                success: false,
+                message: 'This authentication code has already been used. Please wait for the code to rotate in your authenticator app.'
+            });
+        }
+
+        // 3. RFC 6238 TOTP validation
         //    otplib checks the token against the current 30-second window
         //    and window ±1 (i.e. ±30 seconds) to handle clock drift.
         const isValidToken = await verifyToken(cleanTotpToken, contact.totpSecret);
@@ -79,11 +96,16 @@ exports.verifyAccessCode = async (req, res) => {
             return res.status(401).json(AUTH_FAILURE);
         }
 
-        // 3. Mark contact as verified on first successful TOTP validation
+        // Mark token as consumed in in-memory TTL replay cache and database
+        markTokenConsumed(contact.id, cleanTotpToken);
+        contact.lastUsedTotpToken = cleanTotpToken;
+        contact.lastTotpUsedAt = new Date();
+
+        // 4. Mark contact as verified on first successful TOTP validation
         if (!contact.isVerified) {
             contact.isVerified = true;
-            await contact.save();
         }
+        await contact.save();
 
         // 4. Query active alerts for the associated user
         const activeAlert = await Alert.findOne({
@@ -365,6 +387,40 @@ exports.triggerRemoteSiren = async (req, res) => {
                 io.to(`tracker-${targetUserId}`).emit('remote_siren_command', payload);
             }
             console.log(`[Remote Siren REST] 🔊 Siren ${sirenAction} broadcast for ward ${targetUserId} (device: ${targetDeviceId}) by ${triggeredByRole}`);
+        }
+
+        // Issue 3.1: Also dispatch High-Priority FCM Push Notification
+        // Ensures the siren fires/stops even when the Android device is in deep Doze mode or backgrounded.
+        try {
+            const fcmTokens = new Set();
+            if (targetUserId) {
+                const targetUser = await User.findByPk(targetUserId, {
+                    include: [{ model: Device, as: 'devices' }]
+                });
+                if (targetUser?.fcmToken) fcmTokens.add(targetUser.fcmToken);
+                if (targetUser?.devices) {
+                    targetUser.devices.forEach(d => {
+                        if (d.fcmToken) fcmTokens.add(d.fcmToken);
+                    });
+                }
+            }
+            if (targetDeviceId && fcmTokens.size === 0) {
+                const targetDev = await Device.findByPk(targetDeviceId);
+                if (targetDev?.fcmToken) fcmTokens.add(targetDev.fcmToken);
+            }
+            const tokenList = Array.from(fcmTokens).filter(Boolean);
+            if (tokenList.length > 0) {
+                await sendRemoteSirenPushNotification(tokenList, {
+                    deviceId: targetDeviceId,
+                    targetUserId,
+                    action: sirenAction,
+                    triggeredBy: triggeredByRole
+                });
+            } else {
+                console.log(`[Remote Siren REST] ℹ️ No registered FCM device tokens for user ${targetUserId}. WebSocket delivered.`);
+            }
+        } catch (pushErr) {
+            console.warn('[Remote Siren REST] FCM push dispatch warning:', pushErr.message);
         }
 
         res.status(200).json({

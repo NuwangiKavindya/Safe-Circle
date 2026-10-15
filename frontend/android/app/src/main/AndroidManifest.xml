@@ -43,20 +43,32 @@
 
       <!--
         SafeCircle 24/7 Motion Sensor Foreground Service
-        FIX Phase 3: foregroundServiceType now includes "location" because
-        MotionForegroundService calls FusedLocationProviderClient directly.
-        Without "location" in this attribute, Android 10+ (API 29+) raises a
-        SecurityException when the service requests location updates, even if
-        ACCESS_FINE_LOCATION permission is granted at runtime.
+        Includes "location", "specialUse", and "microphone" foregroundServiceType attributes:
+        - "location": FusedLocationProviderClient background tracking (API 29+)
+        - "specialUse": Continuous 24/7 motion sensor theft anomaly detection (API 34+)
+        - "microphone": Ambient SOS audio recording in background (Android 11+ / API 30+, Android 14+ / API 34+)
       -->
       <service
         android:name=".MotionForegroundService"
         android:enabled="true"
         android:exported="false"
-        android:foregroundServiceType="location|specialUse">
+        android:foregroundServiceType="location|specialUse|microphone">
         <property
           android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
           android:value="SafeCircle Motion Theft Anomaly Monitoring Engine" />
+      </service>
+
+      <!--
+        SafeCircle High-Priority Firebase Cloud Messaging Service
+        Handles incoming background data pushes (e.g. remote siren trigger/stop)
+        even when the device is locked, in deep Doze mode, or the app is killed.
+      -->
+      <service
+        android:name=".SafeCircleMessagingService"
+        android:exported="false">
+        <intent-filter>
+          <action android:name="com.google.firebase.MESSAGING_EVENT" />
+        </intent-filter>
       </service>
     </application>
 

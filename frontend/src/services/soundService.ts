@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules, Platform } from 'react-native';
 
-const { AlarmSoundModule } = NativeModules;
+const { AlarmSoundModule, MotionGuardModule } = NativeModules;
 
 export interface SoundPreset {
   id: string;
@@ -136,7 +136,10 @@ class SoundService {
   }
 
   /**
-   * Stop physical audio playback immediately
+   * Stop physical audio playback immediately.
+   * NOTE: This only stops the AlarmSoundModule ToneGenerator.
+   * To also silence the MotionForegroundService's native alarm, call
+   * stopNativeAlarm() alongside this method.
    */
   public stopSound() {
     if (this.activeInterval) {
@@ -144,7 +147,7 @@ class SoundService {
       this.activeInterval = null;
     }
 
-    // Stop Native Android STREAM_ALARM Siren
+    // Stop Native Android STREAM_ALARM Siren (AlarmSoundModule ToneGenerator)
     if (Platform.OS === 'android' && AlarmSoundModule && AlarmSoundModule.stopSound) {
       try {
         AlarmSoundModule.stopSound();
@@ -156,6 +159,73 @@ class SoundService {
     this.isPlaying = false;
     this.currentPlayingId = null;
     console.log('[SoundService] ⏹️ Physical alarm sound stopped.');
+  }
+
+  /**
+   * Silence the MotionForegroundService's internal nativeToneGenerator.
+   *
+   * The service keeps its own ToneGenerator that fires unconditionally when a
+   * theft anomaly is detected — even when the JS thread is dead. stopSound()
+   * cannot reach it because AlarmSoundModule owns a separate generator.
+   * This method bridges to MotionGuardModule.stopNativeAlarm() which uses:
+   *   1. A direct in-process call to the live service instance (zero-latency).
+   *   2. An Intent ACTION_STOP_NATIVE_ALARM as a belt-and-suspenders fallback.
+   *
+   * Always call this together with stopSound() when cancelling the SOS alarm.
+   */
+  public stopNativeAlarm(): void {
+    if (Platform.OS === 'android' && MotionGuardModule && MotionGuardModule.stopNativeAlarm) {
+      try {
+        MotionGuardModule.stopNativeAlarm()
+          .then(() => {
+            console.log('[SoundService] 🔕 MotionForegroundService native alarm silenced.');
+          })
+          .catch((e: any) => {
+            console.warn('[SoundService] stopNativeAlarm bridge error:', e);
+          });
+      } catch (e) {
+        console.warn('[SoundService] stopNativeAlarm call error:', e);
+      }
+    }
+  }
+
+  /**
+   * Trigger the MotionForegroundService's internal nativeToneGenerator directly.
+   * Useful when remotely activating the emergency siren from guardian commands.
+   */
+  public triggerNativeAlarm(): void {
+    if (Platform.OS === 'android' && MotionGuardModule && MotionGuardModule.triggerNativeAlarm) {
+      try {
+        MotionGuardModule.triggerNativeAlarm()
+          .then(() => {
+            console.log('[SoundService] 🚨 MotionForegroundService native alarm triggered.');
+          })
+          .catch((e: any) => {
+            console.warn('[SoundService] triggerNativeAlarm bridge error:', e);
+          });
+      } catch (e) {
+        console.warn('[SoundService] triggerNativeAlarm call error:', e);
+      }
+    }
+  }
+
+  /**
+   * Convenience helper — starts both the AlarmSoundModule ToneGenerator and
+   * the MotionForegroundService's nativeToneGenerator in a single call.
+   */
+  public playAllAlarms(soundId: string = 'police_siren'): void {
+    this.playSound(soundId);
+    this.triggerNativeAlarm();
+  }
+
+  /**
+   * Convenience helper — stops both the AlarmSoundModule ToneGenerator and
+   * the MotionForegroundService's nativeToneGenerator in a single call.
+   * Prefer this over calling stopSound() + stopNativeAlarm() separately.
+   */
+  public stopAllAlarms(): void {
+    this.stopSound();
+    this.stopNativeAlarm();
   }
 
   /**

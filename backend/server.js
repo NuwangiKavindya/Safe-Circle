@@ -34,6 +34,7 @@ const susRoutes = require('./routes/susRoutes');
 const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
+const { sendRemoteSirenPushNotification } = require('./services/pushService');
 
 // Connect to database
 connectDB();
@@ -647,6 +648,40 @@ io.on('connection', (socket) => {
                 io.to(`user-${targetUserId}`).emit('remote_siren_command', commandPayload);
                 // Broadcast to tracker room (ensures all guardians tracking this ward see updated state)
                 io.to(`tracker-${targetUserId}`).emit('remote_siren_command', commandPayload);
+            }
+
+            // Issue 3.1: Also dispatch High-Priority FCM Push Notification
+            // Bypasses Android Doze mode and background process freezes to trigger/silence physical alarm.
+            try {
+                const fcmTokens = new Set();
+                if (targetUserId) {
+                    const targetUser = await User.findByPk(targetUserId, {
+                        include: [{ model: Device, as: 'devices' }]
+                    });
+                    if (targetUser?.fcmToken) fcmTokens.add(targetUser.fcmToken);
+                    if (targetUser?.devices) {
+                        targetUser.devices.forEach(d => {
+                            if (d.fcmToken) fcmTokens.add(d.fcmToken);
+                        });
+                    }
+                }
+                if (targetDeviceId && fcmTokens.size === 0) {
+                    const targetDev = await Device.findByPk(targetDeviceId);
+                    if (targetDev?.fcmToken) fcmTokens.add(targetDev.fcmToken);
+                }
+                const tokenList = Array.from(fcmTokens).filter(Boolean);
+                if (tokenList.length > 0) {
+                    await sendRemoteSirenPushNotification(tokenList, {
+                        deviceId: targetDeviceId,
+                        targetUserId,
+                        action: sirenAction,
+                        triggeredBy: triggeredByRole
+                    });
+                } else {
+                    console.log(`[Socket.IO] ℹ️ No registered FCM device tokens for user ${targetUserId}. WebSocket delivered.`);
+                }
+            } catch (pushErr) {
+                console.warn('[Socket.IO] FCM push dispatch warning:', pushErr.message);
             }
 
             // Also emit to the sender socket so sender UI synchronizes immediately

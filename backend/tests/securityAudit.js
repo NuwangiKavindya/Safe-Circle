@@ -286,6 +286,24 @@ async function runSecurityAudit() {
         passedVerify,
         'Trusted contacts can authenticate using active TOTP code.'
       );
+
+      // 5.2b Attempt Token Replay Attack (RFC 6238 Section 5.2 Replay Prevention)
+      const replayRes = await httpRequest({
+        port: 5001,
+        path: '/api/contacts/shared/verify',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-test-bypass': 'skip-limiter' },
+      }, { accessCode, totpToken });
+      const passedReplay = replayRes.statusCode === 401 && replayRes.body.success === false && /already been used/i.test(replayRes.body.message);
+      recordTest(
+        'SEC-TOTP-04',
+        'OWASP M4 (Access Delegation)',
+        'Prevent TOTP Token Replay Attack',
+        '401 Unauthorized (Token Already Consumed)',
+        `Status ${replayRes.statusCode}: ${replayRes.body?.message || ''}`,
+        passedReplay,
+        'Server rejects reused TOTP token within the validity window.'
+      );
     }
 
     // 5.3 Attempt Invalid Access Code Verification

@@ -139,13 +139,15 @@ async function main() {
     return `Found ${data.data.length} registered device(s)`;
   });
 
+  const janePhone = `+188${Math.floor(10000000 + Math.random() * 90000000)}`;
+
   // 7. Add Trusted Contact (Unregistered User -> Prioritizes Email Invitation)
   await runStep('Add Trusted Contact (POST /api/contacts - Priority Email Route)', async () => {
     const { status, ok, data } = await request('/api/contacts', {
       method: 'POST',
       body: JSON.stringify({
         contactName: 'Emergency Responder Jane',
-        contactPhone: '+19998887777',
+        contactPhone: janePhone,
         contactEmail: `jane-${uniqueId}@example.com`,
         relationship: 'Family',
       }),
@@ -311,7 +313,7 @@ async function main() {
     const janeUser = {
       fullName: `Guardian Jane ${uniqueId}`,
       email: `jane-${uniqueId}@example.com`,
-      phoneNumber: `+19998887777`,
+      phoneNumber: janePhone,
       password: 'Password123!',
       confirmPassword: 'Password123!',
     };

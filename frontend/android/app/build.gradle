@@ -120,6 +120,9 @@ dependencies {
     // thread is throttled or paused by Android on API 29+ devices.
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
+    // Stage 3.1: Firebase Cloud Messaging for high-priority background remote siren triggers
+    implementation("com.google.firebase:firebase-messaging:23.4.1")
+
     // Stage 2: On-device TFLite neural inference (used by MotionForegroundService
     // and MotionGuardModule.runTFLiteInference).
     //

@@ -129,8 +129,68 @@ async function sendGuardianInvitePushNotification(targetTokens, invitePayload) {
   }
 }
 
+/**
+ * Send High-Priority Remote Siren Command via FCM Data Message
+ * Bypasses Android Doze mode and background process freezes to trigger/silence physical alarm.
+ * @param {Array<string>} targetTokens Array of destination device FCM Tokens
+ * @param {Object} sirenPayload Siren metadata (action: 'START' | 'STOP', deviceId, targetUserId, triggeredBy)
+ */
+async function sendRemoteSirenPushNotification(targetTokens, sirenPayload) {
+  if (!targetTokens || !Array.isArray(targetTokens) || targetTokens.length === 0) {
+    console.log('[PushService] No FCM target tokens provided for remote siren. Skipping push.');
+    return { success: false, reason: 'NO_TOKENS' };
+  }
+
+  const validTokens = targetTokens.filter(t => typeof t === 'string' && t.trim().length > 0);
+  if (validTokens.length === 0) return { success: false, reason: 'INVALID_TOKENS' };
+
+  const isStart = sirenPayload.action === 'START';
+
+  const message = {
+    data: {
+      type: 'REMOTE_SIREN',
+      alarm_action: isStart ? 'START' : 'STOP',
+      action: isStart ? 'START' : 'STOP',
+      deviceId: String(sirenPayload.deviceId || ''),
+      targetUserId: String(sirenPayload.targetUserId || sirenPayload.userId || ''),
+      triggeredBy: String(sirenPayload.triggeredBy || 'GUARDIAN'),
+      timestamp: new Date().toISOString()
+    },
+    android: {
+      priority: 'high',
+      ...(isStart ? {
+        notification: {
+          channelId: 'safecircle_emergency_channel',
+          title: '🚨 REMOTE EMERGENCY SIREN ACTIVATED',
+          body: 'A trusted guardian has remotely triggered the audible siren on this device.',
+          sound: 'default',
+          priority: 'max',
+          visibility: 'public'
+        }
+      } : {})
+    },
+    tokens: validTokens,
+  };
+
+  if (isInitialized && getApps().length > 0) {
+    try {
+      const response = await getMessaging().sendEachForMulticast(message);
+      console.log(`[PushService] 🚀 Remote Siren (${isStart ? 'START' : 'STOP'}) push sent to ${response.successCount} / ${validTokens.length} devices.`);
+      return { success: true, response };
+    } catch (err) {
+      console.error('[PushService Error] Failed to send remote siren push:', err);
+      return { success: false, error: err };
+    }
+  } else {
+    console.log(`[PushService Mock] 📱 Remote Siren Push simulated for ${validTokens.length} devices: action=${isStart ? 'START' : 'STOP'}`);
+    return { success: true, simulated: true };
+  }
+}
+
 module.exports = {
   sendEmergencyPushNotification,
   sendGuardianInvitePushNotification,
+  sendRemoteSirenPushNotification,
 };
+
 

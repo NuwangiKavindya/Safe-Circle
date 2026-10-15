@@ -606,7 +606,7 @@ const MainApp = () => {
               if (prev <= 1) {
                 clearInterval(countdownTimerRef.current);
                 setIsCountdownModalVisible(false);
-                soundService.stopSound();
+                soundService.stopAllAlarms();
                 triggerSosSignal(); // Auto-fire emergency SOS broadcast if not cancelled!
                 return 0;
               }
@@ -631,7 +631,7 @@ const MainApp = () => {
       motionService.stopMonitoring();
       setIsMotionGuardActive(false);
       setLiveEnergyLevel(0);
-      soundService.stopSound();
+      soundService.stopAllAlarms();
       triggerFeedback('Motion Theft Guard deactivated.', false);
     }
   };
@@ -641,14 +641,14 @@ const MainApp = () => {
       clearInterval(countdownTimerRef.current);
     }
     setIsCountdownModalVisible(false);
-    soundService.stopSound();
+    soundService.stopAllAlarms();
     triggerFeedback('Emergency SOS cancelled. Device marked safe.', false);
   };
 
   // Silence Remote Siren from Ward Device
   const handleSilenceDeviceRemoteSiren = () => {
     setIsRemoteSirenTriggeredByGuardian(false);
-    soundService.stopSound();
+    soundService.stopAllAlarms();
     try {
       Vibration.cancel();
     } catch (e) {}
@@ -744,14 +744,14 @@ const MainApp = () => {
       if (cmd && cmd.action === 'START') {
         setIsRemoteSirenTriggeredByGuardian(true);
         soundService.getSelectedSound().then(preferred => {
-          soundService.playSound(preferred || 'police_siren');
+          soundService.playAllAlarms(preferred || 'police_siren');
         });
         try {
           Vibration.vibrate([0, 800, 300, 800], true);
         } catch (e) {}
       } else if (cmd && cmd.action === 'STOP') {
         setIsRemoteSirenTriggeredByGuardian(false);
-        soundService.stopSound();
+        soundService.stopAllAlarms();
         try {
           Vibration.cancel();
         } catch (e) {}

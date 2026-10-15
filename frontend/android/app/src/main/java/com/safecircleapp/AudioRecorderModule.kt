@@ -1,6 +1,7 @@
 package com.safecircleapp
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.os.Build
@@ -35,7 +36,10 @@ class AudioRecorderModule(private val reactContext: ReactApplicationContext) :
             return
         }
 
-        // 2. Stop any existing recording
+        // 2. Ensure foreground service with microphone capability is active for Android 11+ and 14+
+        ensureForegroundServiceActive()
+
+        // 3. Stop any existing recording
         stopInternal()
 
         try {
@@ -47,8 +51,8 @@ class AudioRecorderModule(private val reactContext: ReactApplicationContext) :
             val outputFile = File(audioDir, "ambient_sos_${System.currentTimeMillis()}.m4a")
             activeOutputFile = outputFile
 
-            // 3. Initialize MediaRecorder with standard AAC / MPEG-4 settings
-            val context = reactContext.currentActivity ?: reactContext
+            // 4. Initialize MediaRecorder using applicationContext (persistent in background)
+            val context = reactContext.applicationContext ?: reactContext
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(context)
             } else {
@@ -61,31 +65,43 @@ class AudioRecorderModule(private val reactContext: ReactApplicationContext) :
                 setAudioSamplingRate(44100)
                 setAudioEncodingBitRate(128000)
                 setOutputFile(outputFile.absolutePath)
+                setOnErrorListener { _, what, extra ->
+                    Log.e("AudioRecorderModule", "MediaRecorder error: what=$what, extra=$extra")
+                }
+                setOnInfoListener { _, what, extra ->
+                    Log.d("AudioRecorderModule", "MediaRecorder info: what=$what, extra=$extra")
+                }
                 prepare()
                 start()
             }
 
             isRecordingAudio = true
-            Log.d("AudioRecorderModule", "🎙️ Ambient audio recording started: ${outputFile.name} (Duration: ${duration}s)")
+            Log.d("AudioRecorderModule", "🎙️ Real ambient audio recording started: ${outputFile.name} (Duration: ${duration}s)")
 
-            // 4. Automatically stop after durationSeconds
+            // 5. Automatically stop after durationSeconds
             stopRunnable = Runnable {
                 try {
                     if (isRecordingAudio) {
                         stopInternal()
-                        Log.d("AudioRecorderModule", "🎙️ Recording finished. File size: ${outputFile.length()} bytes")
+                        val fileSize = if (outputFile.exists()) outputFile.length() else 0L
+                        Log.d("AudioRecorderModule", "🎙️ Recording finished. File size: $fileSize bytes")
 
-                        // Ensure file exists and has content; write valid audio frame if empty
-                        if (!outputFile.exists() || outputFile.length() == 0L) {
-                            Log.w("AudioRecorderModule", "Recording file is empty, writing fallback audio bytes")
-                            writeFallbackAudio(outputFile)
+                        // Ensure real audio was captured. Never write silent dummy MP3 frames
+                        // to disguise recording failure.
+                        if (!outputFile.exists() || fileSize <= 0L) {
+                            Log.e("AudioRecorderModule", "❌ Audio recording failed: captured file is empty (0 bytes)")
+                            promise.reject(
+                                "ERR_RECORDING_EMPTY",
+                                "Audio recording failed: captured file is empty (0 bytes). Ensure microphone permissions and foreground service are active."
+                            )
+                            return@Runnable
                         }
 
                         val result = Arguments.createMap().apply {
                             putString("uri", "file://${outputFile.absolutePath}")
                             putString("name", outputFile.name)
                             putString("type", "audio/m4a")
-                            putDouble("size", outputFile.length().toDouble())
+                            putDouble("size", fileSize.toDouble())
                             putInt("duration", duration)
                         }
                         promise.resolve(result)
@@ -105,6 +121,33 @@ class AudioRecorderModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Ensures MotionForegroundService is running so that background microphone access
+     * is authorized under Android 11+ and Android 14+ (foregroundServiceType="microphone").
+     */
+    private fun ensureForegroundServiceActive() {
+        if (!MotionForegroundService.isServiceRunning) {
+            try {
+                Log.d("AudioRecorderModule", "MotionForegroundService not running; starting it to enable background microphone access.")
+                val intent = Intent(reactContext, MotionForegroundService::class.java).apply {
+                    action = MotionForegroundService.ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    reactContext.startForegroundService(intent)
+                } else {
+                    reactContext.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w("AudioRecorderModule", "Could not start MotionForegroundService for microphone access: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Explicit fallback method invoked by React Native if live audio capture fails
+     * or is unavailable. Creates a valid silent MP3 file on disk so the SOS upload
+     * pipeline does not crash on missing files.
+     */
     @ReactMethod
     fun createFallbackAudio(promise: Promise) {
         try {
