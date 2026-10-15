@@ -37,17 +37,25 @@ exports.verifyAccessCode = async (req, res) => {
             });
         }
 
+        const cleanAccessCode = String(accessCode).trim().toUpperCase();
+        const cleanTotpToken = String(totpToken).trim();
+
         // Exactly 6 digits required
-        if (!/^\d{6}$/.test(totpToken)) {
+        if (!/^\d{6}$/.test(cleanTotpToken)) {
             return res.status(400).json({
                 success: false,
                 message: 'totpToken must be exactly 6 digits.'
             });
         }
 
-        // 1. Look up the contact relationship by the stable, non-secret handle
+        // 1. Look up the contact relationship by the stable, non-secret handle (e.g. "SC-A3F2B1C9")
         const contact = await TrustedContact.findOne({
-            where: { accessCode },
+            where: {
+                [Op.or]: [
+                    { accessCode: cleanAccessCode },
+                    { accessCode: String(accessCode).trim() }
+                ]
+            },
             include: [{ model: User, as: 'user' }]
         });
 
@@ -65,7 +73,7 @@ exports.verifyAccessCode = async (req, res) => {
         // 2. RFC 6238 TOTP validation
         //    otplib checks the token against the current 30-second window
         //    and window ±1 (i.e. ±30 seconds) to handle clock drift.
-        const isValidToken = await verifyToken(totpToken, contact.totpSecret);
+        const isValidToken = await verifyToken(cleanTotpToken, contact.totpSecret);
 
         if (!isValidToken) {
             return res.status(401).json(AUTH_FAILURE);
@@ -189,11 +197,15 @@ exports.getSharedLocationHistory = async (req, res) => {
         // 1. Authenticate relationship via verified tracker session
         const contact = req.trackerContact;
 
-        if (accessCode && contact.accessCode !== accessCode) {
-            return res.status(403).json({
-                success: false,
-                message: 'Access forbidden: Access code does not match authenticated tracker session.'
-            });
+        if (accessCode) {
+            const cleanParamCode = accessCode.trim().toUpperCase();
+            const contactCode = (contact.accessCode || '').trim().toUpperCase();
+            if (contactCode !== cleanParamCode && contact.accessCode !== accessCode) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access forbidden: Access code does not match authenticated tracker session.'
+                });
+            }
         }
 
         // 2. Validate emergency status or ALWAYS_ON mode

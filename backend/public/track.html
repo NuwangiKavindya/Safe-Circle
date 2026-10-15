@@ -74,7 +74,7 @@
         }
 
         .input-group {
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             text-align: left;
         }
 
@@ -84,8 +84,17 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             color: var(--text-muted);
+            margin-bottom: 4px;
+            display: block;
+        }
+
+        .input-hint {
+            font-size: 12px;
+            color: var(--text-muted);
             margin-bottom: 8px;
             display: block;
+            line-height: 1.4;
+            opacity: 0.85;
         }
 
         .auth-input {
@@ -98,9 +107,32 @@
             font-size: 16px;
             font-weight: 600;
             text-align: center;
-            letter-spacing: 4px;
             outline: none;
             transition: all 0.3s ease;
+        }
+
+        .auth-input-handle {
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            font-weight: 700;
+        }
+
+        .auth-input-totp {
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 8px;
+            color: var(--primary);
+        }
+
+        .auth-security-note {
+            margin-top: 20px;
+            font-size: 12px;
+            color: var(--text-muted);
+            opacity: 0.75;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
         }
 
         .auth-input:focus {
@@ -317,15 +349,26 @@
     <div class="auth-container" id="authView">
         <div class="auth-logo">🛡️</div>
         <h1 class="auth-title">SafeCircle Secure Access</h1>
-        <p class="auth-subtitle">Please enter your 6-digit secure access code to connect to the tracking dashboard.</p>
+        <p class="auth-subtitle">Enter your Contact Handle and 6-digit Authenticator Code (Google Authenticator / Authy) to connect to the recovery dashboard.</p>
         
         <div class="input-group">
-            <label class="input-label" for="codeField">Access Code</label>
-            <input type="text" id="codeField" class="auth-input" placeholder="000000" maxlength="6" autofocus autocomplete="off">
+            <label class="input-label" for="codeField">Contact Handle</label>
+            <span class="input-hint">Shared in your invitation or SOS notification (e.g. SC-A3F2B1C9)</span>
+            <input type="text" id="codeField" class="auth-input auth-input-handle" placeholder="SC-XXXXXXXX" maxlength="20" autofocus autocomplete="off" autocapitalize="characters">
+        </div>
+
+        <div class="input-group">
+            <label class="input-label" for="totpField">Authentication Code (TOTP)</label>
+            <span class="input-hint">6-digit rotating code from Google Authenticator or Authy</span>
+            <input type="text" id="totpField" class="auth-input auth-input-totp" placeholder="000000" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code">
         </div>
         
-        <button id="verifyBtn" class="auth-button">Establish Connection</button>
-        <div class="error-message" id="errorMsg">Access Denied: Invalid security code.</div>
+        <button id="verifyBtn" class="auth-button">Establish Tracking Connection</button>
+        <div class="error-message" id="errorMsg"></div>
+
+        <div class="auth-security-note">
+            <span>🔐</span> RFC 6238 TOTP · 30-Second Time Window Validated
+        </div>
     </div>
 
     <!-- Active Tracking Dashboard View -->
@@ -413,55 +456,98 @@
         let socket;
         let audioPlayer = null;
 
-        // Auto-extract access code from URL parameters
+        // Auto-extract access code and TOTP from URL parameters
         window.onload = () => {
             const urlParams = new URLSearchParams(window.location.search);
-            const code = urlParams.get('code');
-            if (code && code.trim().length === 6) {
-                document.getElementById('codeField').value = code;
-                submitAccessCode(code);
+            const code = urlParams.get('code') || urlParams.get('accessCode');
+            const totp = urlParams.get('totp') || urlParams.get('totpToken');
+
+            if (code && code.trim()) {
+                const cleanCode = code.trim().toUpperCase();
+                document.getElementById('codeField').value = cleanCode;
+
+                if (totp && /^\d{6}$/.test(totp.trim())) {
+                    document.getElementById('totpField').value = totp.trim();
+                    submitVerification(cleanCode, totp.trim());
+                } else {
+                    // Pre-filled access code from alert/invitation link; focus the TOTP code field
+                    document.getElementById('totpField').focus();
+                }
+            } else {
+                document.getElementById('codeField').focus();
             }
         };
 
         // Submit Button Handler
         document.getElementById('verifyBtn').onclick = () => {
-            const code = document.getElementById('codeField').value.trim();
-            submitAccessCode(code);
+            const code = document.getElementById('codeField').value.trim().toUpperCase();
+            const totp = document.getElementById('totpField').value.trim();
+            submitVerification(code, totp);
         };
 
-        // Enter Key Handler
+        // Enter Key Handlers
         document.getElementById('codeField').onkeypress = (e) => {
             if (e.key === 'Enter') {
-                submitAccessCode(e.target.value.trim());
+                const code = document.getElementById('codeField').value.trim().toUpperCase();
+                const totp = document.getElementById('totpField').value.trim();
+                if (code && !totp) {
+                    document.getElementById('totpField').focus();
+                } else {
+                    submitVerification(code, totp);
+                }
             }
         };
 
-        // Access Code Verification
-        async function submitAccessCode(accessCode) {
-            if (accessCode.length !== 6) {
-                showError('Please enter a valid 6-digit access code.');
+        document.getElementById('totpField').onkeypress = (e) => {
+            if (e.key === 'Enter') {
+                const code = document.getElementById('codeField').value.trim().toUpperCase();
+                const totp = document.getElementById('totpField').value.trim();
+                submitVerification(code, totp);
+            }
+        };
+
+        // Access Code + TOTP Verification
+        async function submitVerification(accessCode, totpToken) {
+            const errorMsg = document.getElementById('errorMsg');
+            errorMsg.style.display = 'none';
+
+            if (!accessCode || accessCode.length < 4) {
+                showError('Please enter a valid Contact Handle / Access Code (e.g. SC-A3F2B1C9).');
+                document.getElementById('codeField').focus();
                 return;
             }
 
-            const errorMsg = document.getElementById('errorMsg');
-            errorMsg.style.display = 'none';
+            if (!totpToken || !/^\d{6}$/.test(totpToken)) {
+                showError('Please enter your 6-digit Authenticator Code (TOTP).');
+                document.getElementById('totpField').focus();
+                return;
+            }
+
+            const verifyBtn = document.getElementById('verifyBtn');
+            const originalBtnText = verifyBtn.innerText;
+            verifyBtn.disabled = true;
+            verifyBtn.innerText = 'Verifying...';
 
             try {
                 const response = await fetch('/api/contacts/shared/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ accessCode })
+                    body: JSON.stringify({ accessCode, totpToken })
                 });
 
                 const resData = await response.json();
                 if (!response.ok || !resData.success) {
-                    showError(resData.message || 'Verification failed.');
+                    showError(resData.message || 'Verification failed. Please check your credentials.');
+                    verifyBtn.disabled = false;
+                    verifyBtn.innerText = originalBtnText;
                     return;
                 }
 
-                // If not in active SOS alert
-                if (!resData.data.isActiveSos) {
+                // If not in active SOS alert and sharing mode is not ALWAYS_ON
+                if (!resData.data.isActiveSos && resData.data.sharingMode !== 'ALWAYS_ON') {
                     showError('Access Denied: This access code is active, but the user is not in an active emergency SOS state.');
+                    verifyBtn.disabled = false;
+                    verifyBtn.innerText = originalBtnText;
                     return;
                 }
 
@@ -473,6 +559,8 @@
                 displayDashboard(resData.data);
             } catch (err) {
                 showError('Network error connecting to verification servers.');
+                verifyBtn.disabled = false;
+                verifyBtn.innerText = originalBtnText;
             }
         }
 
