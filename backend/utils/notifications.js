@@ -84,9 +84,15 @@ const dispatchSosNotifications = async (user, contacts, alert) => {
 
     // 3. Dispatch FCM Push Notifications to registered contact devices
     try {
+        const { Op } = require('sequelize');
         const contactEmails = contacts.map(c => c.contactEmail).filter(Boolean);
-        if (contactEmails.length > 0) {
-            const contactUsers = await User.findAll({ where: { email: contactEmails } });
+        const contactPhones = contacts.map(c => c.contactPhone).filter(Boolean);
+        const orConditions = [];
+        if (contactEmails.length > 0) orConditions.push({ email: contactEmails });
+        if (contactPhones.length > 0) orConditions.push({ phoneNumber: contactPhones });
+
+        if (orConditions.length > 0) {
+            const contactUsers = await User.findAll({ where: { [Op.or]: orConditions } });
             const fcmTokens = contactUsers.map(u => u.fcmToken).filter(Boolean);
             if (fcmTokens.length > 0) {
                 await sendEmergencyPushNotification(fcmTokens, {

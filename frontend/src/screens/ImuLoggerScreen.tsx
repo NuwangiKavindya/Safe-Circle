@@ -86,7 +86,7 @@ const LABEL_ICONS: Record<ActivityLabel, string> = {
 let sensorsModule: any = null;
 try {
   sensorsModule = require('react-native-sensors');
-} catch (_) {
+} catch {
   sensorsModule = null;
 }
 

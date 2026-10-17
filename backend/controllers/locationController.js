@@ -40,13 +40,17 @@ exports.logLocation = async (req, res) => {
         // Broadcast location via WebSocket to any connected tracking web clients
         const io = req.app.get('io');
         if (io) {
-            io.to(`device-${deviceId}`).emit('location-broadcast', {
+            const payload = {
                 deviceId,
                 latitude,
                 longitude,
                 accuracy,
                 timestamp: log.timestamp || new Date()
-            });
+            };
+            io.to(`device-${deviceId}`).emit('location-broadcast', payload);
+            if (req.user && req.user.id) {
+                io.to(`tracker-${req.user.id}`).emit('location-broadcast', payload);
+            }
         }
 
         res.status(201).json({

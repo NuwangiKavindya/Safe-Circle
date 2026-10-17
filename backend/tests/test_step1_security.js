@@ -2,6 +2,8 @@ const io = require('socket.io-client');
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 const http = require('http');
+const { spawn } = require('child_process');
+const path = require('path');
 
 dotenv.config();
 
@@ -41,6 +43,7 @@ async function runStep1Tests() {
 
     let passed = 0;
     let failed = 0;
+    let serverProcess = null;
 
     function assert(cond, desc) {
         if (cond) {
@@ -53,6 +56,18 @@ async function runStep1Tests() {
     }
 
     try {
+        // Ensure backend server is running on port 5001
+        try {
+            await httpRequest({ hostname: '127.0.0.1', port: 5001, path: '/api-docs/', method: 'GET' });
+        } catch (e) {
+            console.log('[Step1Tests] Spawning local Express backend server on port 5001...');
+            serverProcess = spawn('node', [path.join(__dirname, '../server.js')], {
+                cwd: path.join(__dirname, '..'),
+                env: { ...process.env, PORT: '5001' },
+            });
+            await new Promise((resolve) => setTimeout(resolve, 3500));
+        }
+
         // Setup Test Users and Devices
         const timestamp = Date.now();
         const userA = await User.create({
@@ -310,6 +325,10 @@ async function runStep1Tests() {
     } catch (err) {
         console.error('Test execution error:', err);
         failed++;
+    } finally {
+        if (serverProcess) {
+            serverProcess.kill('SIGINT');
+        }
     }
 
     console.log('\n====================================================');

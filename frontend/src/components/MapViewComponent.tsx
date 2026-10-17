@@ -9,7 +9,6 @@ import {
   DimensionValue,
   TextInput,
   Alert,
-  Modal,
   Linking,
 } from 'react-native';
 import {
@@ -22,10 +21,10 @@ import {
   CameraRef,
 } from '@maplibre/maplibre-react-native';
 import { SmoothAnimatedMarker } from './SmoothAnimatedMarker';
-import { calculateDistanceMeters, calculateBearingDegrees, generateGradientRoute } from '../utils/distance';
+import { calculateDistanceMeters, generateGradientRoute } from '../utils/distance';
 import { offlineMapService } from '../services/offlineMapService';
 import { SafeZone } from '../services/api';
-import { THEME_PALETTES, COLORS } from '../styles/theme';
+import { THEME_PALETTES } from '../styles/theme';
 import { useTheme } from '../context/ThemeContext';
 import { createGeofencePolygon } from '../utils/geofenceHelper';
 
@@ -126,7 +125,6 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
 
   // Real-time Proximity Calculation
   let proximityDistance: number | null = null;
-  let bearingDegrees: number | null = null;
   let isFinalApproach = false;
 
   if (
@@ -138,12 +136,6 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
     trackerLongitude !== null
   ) {
     proximityDistance = calculateDistanceMeters(
-      trackerLatitude,
-      trackerLongitude,
-      latitude,
-      longitude
-    );
-    bearingDegrees = calculateBearingDegrees(
       trackerLatitude,
       trackerLongitude,
       latitude,
@@ -242,7 +234,7 @@ export const MapViewComponent: React.FC<MapViewComponentProps> = ({
       console.warn('[MapViewComponent] Error launching Google Maps URL:', err);
       try {
         await Linking.openURL(webUrl);
-      } catch (fallbackErr) {
+      } catch {
         Alert.alert('Unable to open map', 'Could not open Google Maps on this device.');
       }
     }

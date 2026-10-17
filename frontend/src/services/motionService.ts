@@ -62,7 +62,7 @@ export const SENSITIVITY_PROFILES: Record<SensitivityMode, SensitivityProfile> =
 let sensorsModule: any = null;
 try {
   sensorsModule = require('react-native-sensors');
-} catch (e) {
+} catch {
   sensorsModule = null;
 }
 

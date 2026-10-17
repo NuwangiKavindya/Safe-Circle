@@ -1041,7 +1041,7 @@ class ApiService {
                 success: false,
                 message: errData.message || `Upload failed with status ${uploadResult.statusCode}`,
               };
-            } catch (_) {
+            } catch {
               // fallback below
             }
           }

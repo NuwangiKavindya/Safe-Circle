@@ -4,7 +4,7 @@ import { MapViewComponent } from '../components/MapViewComponent';
 import { SafeZone } from '../services/api';
 import { LocationCoordinates } from '../services/locationService';
 import { ApiAlert } from '../types';
-import { COLORS, globalStyles } from '../styles/theme';
+import { COLORS } from '../styles/theme';
 import { soundService } from '../services/soundService';
 
 interface TacticalSplitMapScreenProps {
@@ -24,10 +24,10 @@ interface TacticalSplitMapScreenProps {
 export const TacticalSplitMapScreen: React.FC<TacticalSplitMapScreenProps> = ({
   liveLocation,
   safeZones = [],
-  activeAlert,
+  activeAlert: _activeAlert,
   isMotionGuardActive = false,
   onBack,
-  onRecenter,
+  onRecenter: _onRecenter,
   onTriggerSos,
   onToggleMotionGuard,
   onNavigateARView,

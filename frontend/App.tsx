@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Animated, Platform, Alert, Modal, View, Text, TouchableOpacity, Vibration, Share, NativeModules, PermissionsAndroid } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,7 +34,6 @@ import { BindDeviceScreen } from './src/screens/BindDeviceScreen';
 import { AddContactScreen } from './src/screens/AddContactScreen';
 import { TrackerAuthScreen } from './src/screens/TrackerAuthScreen';
 import { TrackerDashboardScreen } from './src/screens/TrackerDashboardScreen';
-import { MapViewComponent } from './src/components/MapViewComponent';
 import { ARViewComponent } from './src/components/ARViewComponent';
 import { TacticalSplitMapScreen } from './src/screens/TacticalSplitMapScreen';
 import { OfflinePackModal } from './src/components/OfflinePackModal';
@@ -112,6 +111,10 @@ const MainApp = () => {
   const [isRemoteSirenTriggeredByGuardian, setIsRemoteSirenTriggeredByGuardian] = useState<boolean>(false);
   const wardSocketRef = useRef<any>(null);
   const trackerSocketRef = useRef<any>(null);
+  const devicesRef = useRef<BoundDevice[]>(devices);
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
 
   // Feedback Banner State
   const [loading, setLoading] = useState(false);
@@ -458,7 +461,7 @@ const MainApp = () => {
     );
   };
 
-  const handleRefreshData = async () => {
+  const handleRefreshData = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     const [cRes, dRes, aRes, zRes, gRes] = await Promise.all([
@@ -503,7 +506,7 @@ const MainApp = () => {
     if (zRes.success && zRes.data) {
       setSafeZones(zRes.data);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     if (token) {
@@ -515,7 +518,7 @@ const MainApp = () => {
       setSafeZones([]);
       setActiveAlert(null);
     }
-  }, [token]);
+  }, [token, handleRefreshData]);
 
   // Safe Zone Handlers
   const handleCreateSafeZone = async (
@@ -597,7 +600,7 @@ const MainApp = () => {
           setCountdownReason(anomaly.reason);
           setCountdownSeconds(5);
           setIsCountdownModalVisible(true);
-          try { Vibration.vibrate([0, 500, 200, 500]); } catch (e) { }
+          try { Vibration.vibrate([0, 500, 200, 500]); } catch { }
           soundService.getSelectedSound().then(snd => soundService.playSound(snd));
 
           if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -610,7 +613,7 @@ const MainApp = () => {
                 triggerSosSignal(); // Auto-fire emergency SOS broadcast if not cancelled!
                 return 0;
               }
-              try { Vibration.vibrate(200); } catch (e) { }
+              try { Vibration.vibrate(200); } catch { }
               return prev - 1;
             });
           }, 1000);
@@ -651,7 +654,7 @@ const MainApp = () => {
     soundService.stopAllAlarms();
     try {
       Vibration.cancel();
-    } catch (e) {}
+    } catch {}
 
     const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : undefined;
     const targetUserId = user?.id;
@@ -734,8 +737,8 @@ const MainApp = () => {
 
     socket.on('connect', () => {
       console.log('[Ward Socket] Connected to server! Socket ID:', socket.id);
-      if (devices.length > 0 && devices[0]?.id) {
-        socket.emit('join-device-room', { deviceId: devices[0].id });
+      if (devicesRef.current.length > 0 && devicesRef.current[0]?.id) {
+        socket.emit('join-device-room', { deviceId: devicesRef.current[0].id });
       }
     });
 
@@ -748,13 +751,13 @@ const MainApp = () => {
         });
         try {
           Vibration.vibrate([0, 800, 300, 800], true);
-        } catch (e) {}
+        } catch {}
       } else if (cmd && cmd.action === 'STOP') {
         setIsRemoteSirenTriggeredByGuardian(false);
         soundService.stopAllAlarms();
         try {
           Vibration.cancel();
-        } catch (e) {}
+        } catch {}
       }
     });
 
@@ -787,7 +790,11 @@ const MainApp = () => {
 
   // Real-Time GPS location tracking using Google Fused Location Provider API & WebSockets
   useEffect(() => {
-    if (token && currentScreen === 'DASHBOARD') {
+    const isLocationActiveScreen = currentScreen === 'DASHBOARD' ||
+      currentScreen === 'FULLSCREEN_MAP' ||
+      currentScreen === 'AR_VIEW';
+
+    if (token && (isLocationActiveScreen || !!activeAlert)) {
       const targetDeviceId = devices.length > 0 && devices[0].id ? devices[0].id : '00000000-0000-0000-0000-000000000000';
       console.log(`[Fused Location Provider] Initializing live GPS tracking for device ID: ${targetDeviceId}`);
 
@@ -1284,7 +1291,7 @@ const MainApp = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [currentScreen, trackerSessionToken]);
+  }, [currentScreen, trackerSessionToken, token]);
 
   const trackedWardId = trackerInfo?.targetUser?.id;
   const trackedDeviceId = trackerInfo?.deviceId;
@@ -1383,7 +1390,7 @@ const MainApp = () => {
         trackerSocketRef.current = null;
       };
     }
-  }, [currentScreen, trackerSessionToken, token, trackerReconnectTrigger, trackedWardId]);
+  }, [currentScreen, trackerSessionToken, token, trackerReconnectTrigger, trackedWardId, trackedDeviceId]);
 
   // Dynamically join device & tracker room if deviceId or wardId updates without reconnecting socket
   useEffect(() => {

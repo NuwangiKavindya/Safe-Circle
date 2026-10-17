@@ -61,5 +61,7 @@ module.exports = {
     generateSecret,
     generateURI,
     verifyToken,
-    generateToken
+    generateToken,
+    generateTOTP: generateToken
 };
+

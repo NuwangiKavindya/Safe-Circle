@@ -111,7 +111,7 @@ class OfflineMapService {
                 console.log('[OfflineMapService] Tile download timed out at:', status?.percentage);
                 safeResolve(false);
               }
-            } catch (e) {
+            } catch {
               safeResolve(false);
             }
           }
@@ -193,7 +193,7 @@ export const offlineMapService = new OfflineMapService();
  */
 export const downloadOfflineRegion = async (
   packName: string = 'Liberty-Colombo-Bounds',
-  bounds?: [[number, number], [number, number]] | [number, number, number, number]
+  _bounds?: [[number, number], [number, number]] | [number, number, number, number]
 ) => {
   return offlineMapService.cacheRegion({
     packName,

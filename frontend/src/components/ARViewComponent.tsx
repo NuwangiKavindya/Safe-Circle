@@ -40,7 +40,7 @@ export const ARViewComponent: React.FC<ARViewComponentProps> = ({
   // Camera Permission & Torch State
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
-  const [isTorchAvailable, setIsTorchAvailable] = useState<boolean>(false);
+  const [_isTorchAvailable, setIsTorchAvailable] = useState<boolean>(false);
   const [hudFilterMode, setHudFilterMode] = useState<'cyan' | 'night_vision'>('cyan');
 
   // Pulse animation for target reticle lock

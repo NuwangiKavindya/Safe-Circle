@@ -71,7 +71,25 @@ async function request(path, options = {}) {
 }
 
 async function main() {
-  // 1. Health / Swagger Docs
+  let serverProcess = null;
+
+  if (BASE_URL.includes('localhost:5001') || BASE_URL.includes('127.0.0.1:5001')) {
+    try {
+      await fetch(`${BASE_URL}/api-docs/`);
+    } catch (e) {
+      console.log('[ApiTests] Spawning local Express backend server on port 5001...');
+      const { spawn } = require('child_process');
+      const path = require('path');
+      serverProcess = spawn('node', [path.join(__dirname, '../server.js')], {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, PORT: '5001' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+    }
+  }
+
+  try {
+    // 1. Health / Swagger Docs
   await runStep('Swagger API Docs (GET /api-docs/)', async () => {
     const res = await fetch(`${BASE_URL}/api-docs/`);
     if (res.status !== 200) throw new Error(`Expected HTTP 200, got ${res.status}`);
@@ -376,6 +394,12 @@ async function main() {
     if (!ok) throw new Error(`HTTP ${status}`);
     return `Device unbind complete`;
   });
+
+  } finally {
+    if (serverProcess) {
+      serverProcess.kill('SIGINT');
+    }
+  }
 
   console.log(`\n------------------------------------------------------`);
   console.log(`📊 Test Results: ${passed} Passed, ${failed} Failed out of ${passed + failed} Tests`);

@@ -333,8 +333,13 @@ exports.login = async (req, res) => {
         let isMatch = false;
         if (user.password) {
             isMatch = await user.matchPassword(password);
-        } else if (user.authProvider === 'google' && password === 'password123') {
-            // Google users can log in using the fallback sandbox password 'password123'
+        } else if (
+            user.authProvider === 'google' &&
+            password === 'password123' &&
+            process.env.NODE_ENV !== 'production' &&
+            process.env.ENABLE_AUTH_SANDBOX === 'true'
+        ) {
+            // Development-only fallback password for offline sandbox testing
             isMatch = true;
         }
 

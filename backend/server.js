@@ -77,12 +77,37 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ─────────────────────────────────────────────────────────────────────────────
 const { protectAny } = require('./middleware/auth');
 const fsSync = require('fs');
-app.get('/uploads/audio/:filename', protectAny, (req, res) => {
-    const filePath = path.join(__dirname, 'uploads', 'audio', req.params.filename);
-    if (!fsSync.existsSync(filePath)) {
-        return res.status(404).json({ success: false, message: 'Audio file not found.' });
+app.get('/uploads/audio/:filename', protectAny, async (req, res) => {
+    try {
+        const safeFilename = path.basename(req.params.filename);
+        const filePath = path.join(__dirname, 'uploads', 'audio', safeFilename);
+        if (!fsSync.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: 'Audio file not found.' });
+        }
+
+        // Object-level authorization: ensure the requesting user or tracker is authorized to access this recording
+        const relativeUrl = `/uploads/audio/${safeFilename}`;
+        const alert = await Alert.findOne({
+            where: { audioFileUrl: relativeUrl }
+        });
+
+        if (alert) {
+            const isOwner = !req.isTracker && req.user && req.user.id === alert.userId;
+            const isGuardian = req.isTracker && req.trackerContact && req.trackerContact.userId === alert.userId;
+
+            if (!isOwner && !isGuardian) {
+                console.warn(`[Audio Auth] Unauthorized audio access attempt for file ${safeFilename} by ${req.isTracker ? 'Tracker ' + req.trackerContact?.id : 'User ' + req.user?.id}`);
+                return res.status(403).json({ success: false, message: 'Forbidden: You do not have permission to access this audio recording.' });
+            }
+        }
+
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.sendFile(filePath);
+    } catch (err) {
+        console.error('[Audio Stream] Error serving audio file:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to retrieve audio recording.' });
     }
-    res.sendFile(filePath);
 });
 
 // Swagger Setup

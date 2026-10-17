@@ -5,7 +5,7 @@ import { soundService } from './soundService';
 let messagingModule: any = null;
 try {
   messagingModule = require('@react-native-firebase/messaging').default;
-} catch (e) {
+} catch {
   messagingModule = null;
 }
 

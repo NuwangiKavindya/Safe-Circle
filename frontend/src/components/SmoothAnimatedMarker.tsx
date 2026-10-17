@@ -61,13 +61,15 @@ export const SmoothAnimatedMarker: React.FC<SmoothAnimatedMarkerProps> = ({
     ).start();
   }, [pulseAnim]);
 
+  const { latitude, longitude, accuracy } = targetCoordinate;
+
   useEffect(() => {
     const startCoord = prevCoordRef.current;
-    const endCoord = targetCoordinate;
+    const endCoord = { latitude, longitude, accuracy };
 
     // 1. Accuracy Check: Ignore low-accuracy noise fixes (> 35m)
-    if (endCoord.accuracy && endCoord.accuracy > maxAccuracyThresholdMeters) {
-      console.log(`[SmoothMarker] Low accuracy fix (${endCoord.accuracy}m > ${maxAccuracyThresholdMeters}m). Skipping position update.`);
+    if (accuracy && accuracy > maxAccuracyThresholdMeters) {
+      console.log(`[SmoothMarker] Low accuracy fix (${accuracy}m > ${maxAccuracyThresholdMeters}m). Skipping position update.`);
       return;
     }
 
@@ -114,9 +116,9 @@ export const SmoothAnimatedMarker: React.FC<SmoothAnimatedMarkerProps> = ({
       }
     };
   }, [
-    targetCoordinate.latitude,
-    targetCoordinate.longitude,
-    targetCoordinate.accuracy,
+    latitude,
+    longitude,
+    accuracy,
     durationMs,
     maxAccuracyThresholdMeters,
     maxJumpThresholdMeters,

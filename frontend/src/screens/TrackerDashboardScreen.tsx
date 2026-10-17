@@ -44,9 +44,7 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
   onNavigateARView,
   onReconnect,
 }) => {
-  if (!trackerInfo) return null;
-
-  const currentLog = trackerLogs.length > 0 ? trackerLogs[0] : null;
+  const currentLog = trackerLogs && trackerLogs.length > 0 ? trackerLogs[0] : null;
   const currentLat = currentLog ? parseFloat(currentLog.latitude) : null;
   const currentLng = currentLog ? parseFloat(currentLog.longitude) : null;
   const accuracy = currentLog && currentLog.accuracy ? parseFloat(currentLog.accuracy) : null;
@@ -159,6 +157,10 @@ export const TrackerDashboardScreen: React.FC<TrackerDashboardScreenProps> = ({
     const interval = setInterval(updateElapsed, 3000);
     return () => clearInterval(interval);
   }, [lastFixTimestamp, trackerLogs]);
+
+  if (!trackerInfo) {
+    return null;
+  }
 
   return (
     <ScrollView contentContainerStyle={globalStyles.scrollContent}>
