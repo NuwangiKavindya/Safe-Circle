@@ -142,9 +142,9 @@ exports.verifyAccessCode = async (req, res) => {
                 relationship: contact.relationship,
                 sharingMode: contact.sharingMode || 'EMERGENCY_ONLY',
                 targetUser: {
-                    id: contact.user.id,
-                    fullName: contact.user.fullName,
-                    phoneNumber: contact.user.phoneNumber
+                    id: contact.user ? contact.user.id : contact.userId,
+                    fullName: contact.user ? contact.user.fullName : contact.contactName,
+                    phoneNumber: contact.user ? contact.user.phoneNumber : ''
                 },
                 isActiveSos: !!activeAlert,
                 alertId: activeAlert ? activeAlert.id : null,
@@ -189,9 +189,9 @@ exports.getTrackerSessionStatus = async (req, res) => {
                 relationship: contact.relationship,
                 sharingMode: contact.sharingMode || 'EMERGENCY_ONLY',
                 targetUser: {
-                    id: contact.user.id,
-                    fullName: contact.user.fullName,
-                    phoneNumber: contact.user.phoneNumber
+                    id: contact.user ? contact.user.id : contact.userId,
+                    fullName: contact.user ? contact.user.fullName : contact.contactName,
+                    phoneNumber: contact.user ? contact.user.phoneNumber : ''
                 },
                 isActiveSos: !!activeAlert,
                 alertId: activeAlert ? activeAlert.id : null,

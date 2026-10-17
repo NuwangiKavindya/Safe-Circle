@@ -241,7 +241,8 @@ exports.getGuardianshipContacts = async (req, res) => {
         // 1. Find all contact entries where the phone or email matches the current user
         const contacts = await TrustedContact.findAll({
             where: {
-                [Op.or]: orConditions
+                [Op.or]: orConditions,
+                userId: { [Op.ne]: currentUser.id }
             },
             include: [
                 {

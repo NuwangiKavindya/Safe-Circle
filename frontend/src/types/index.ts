@@ -1,4 +1,12 @@
-import { TrustedContact, Alert as ApiAlert, GuardianshipWard } from '../services/api';
+import {
+  TrustedContact,
+  Alert as ApiAlert,
+  GuardianshipWard,
+  SafeZone,
+  ContactDeliveryStatus,
+  ContactResponse,
+  CreateSafeZonePayload
+} from '../services/api';
 
 export type ScreenType =
   | 'WELCOME'
@@ -29,7 +37,15 @@ export interface BoundDevice {
   createdAt: string;
 }
 
-export type { TrustedContact, ApiAlert, GuardianshipWard };
+export type {
+  TrustedContact,
+  ApiAlert,
+  GuardianshipWard,
+  SafeZone,
+  ContactDeliveryStatus,
+  ContactResponse,
+  CreateSafeZonePayload
+};
 
 export interface SignUpFormState {
   fullName: string;

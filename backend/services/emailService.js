@@ -37,8 +37,10 @@ function buildGuardianInviteTemplate({
     relationship,
     totpProvisioningUri,
     totpSecret,
-    qrDataUrl
+    qrDataUrl,
+    hasCid = false
 }) {
+    const qrSrc = hasCid ? 'cid:safecircle_totp_qr' : qrDataUrl;
     return `
 <!DOCTYPE html>
 <html>
@@ -109,7 +111,7 @@ function buildGuardianInviteTemplate({
           To protect ${senderName}'s privacy, access requires a rotating 6-digit verification code from your authenticator app (Google Authenticator, Authy, or Microsoft Authenticator).
         </div>
 
-        ${qrDataUrl ? `<img src="${qrDataUrl}" alt="SafeCircle TOTP QR Code" class="qr-image" />` : ''}
+        ${qrSrc ? `<img src="${qrSrc}" alt="SafeCircle TOTP QR Code" class="qr-image" />` : ''}
 
         <div style="margin-top: 12px;">
           ${totpProvisioningUri ? `<a href="${totpProvisioningUri}" class="btn btn-green">📱 Open in Authenticator App</a>` : ''}
@@ -188,6 +190,8 @@ async function sendGuardianInvitationEmail({
         }
     }
 
+    const client = getTransporter();
+
     const htmlContent = buildGuardianInviteTemplate({
         recipientName,
         senderName,
@@ -196,7 +200,8 @@ async function sendGuardianInvitationEmail({
         relationship,
         totpProvisioningUri,
         totpSecret,
-        qrDataUrl
+        qrDataUrl,
+        hasCid: !!(client && qrBuffer)
     });
 
     const mailOptions = {
@@ -216,8 +221,6 @@ async function sendGuardianInvitationEmail({
             }
         ];
     }
-
-    const client = getTransporter();
 
     if (client) {
         try {
