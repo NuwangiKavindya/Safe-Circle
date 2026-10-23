@@ -112,3 +112,68 @@ CREATE TABLE IF NOT EXISTS "SusFeedbacks" (
     "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
     "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+-- 8. Create the Routine Anchors Table (Smart Routine Anomaly Detection)
+CREATE TABLE IF NOT EXISTS "RoutineAnchors" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "userId" UUID NOT NULL REFERENCES "Users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    "label" VARCHAR(100) NOT NULL DEFAULT 'Unnamed Location',
+    "latitude" DECIMAL(10, 8) NOT NULL,
+    "longitude" DECIMAL(11, 8) NOT NULL,
+    "radiusMeters" FLOAT DEFAULT 150.0 NOT NULL,
+    "daysMask" INTEGER DEFAULT 31 NOT NULL,
+    "expectedArrivalMinute" INTEGER DEFAULT 480 NOT NULL,
+    "expectedDepartureMinute" INTEGER DEFAULT 900 NOT NULL,
+    "toleranceMinutes" INTEGER DEFAULT 30 NOT NULL,
+    "observationCount" INTEGER DEFAULT 1 NOT NULL,
+    "isConfirmed" BOOLEAN DEFAULT false NOT NULL,
+    "isActive" BOOLEAN DEFAULT true NOT NULL,
+    "source" VARCHAR(20) DEFAULT 'LEARNED' NOT NULL,
+    "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS routine_anchors_user_active_idx ON "RoutineAnchors" ("userId", "isActive");
+
+-- 9. Create the Routine Deviations Table (Smart Routine Anomaly Detection)
+CREATE TABLE IF NOT EXISTS "RoutineDeviations" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "userId" UUID NOT NULL REFERENCES "Users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    "anchorId" UUID REFERENCES "RoutineAnchors" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    "deviationType" VARCHAR(30) NOT NULL,
+    "actualLatitude" DECIMAL(10, 8),
+    "actualLongitude" DECIMAL(11, 8),
+    "distanceFromAnchorMeters" FLOAT,
+    "description" TEXT,
+    "severity" VARCHAR(10) DEFAULT 'MEDIUM' NOT NULL,
+    "isAcknowledged" BOOLEAN DEFAULT false NOT NULL,
+    "notificationSent" BOOLEAN DEFAULT false NOT NULL,
+    "detectedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS routine_deviations_user_detected_idx ON "RoutineDeviations" ("userId", "detectedAt");
+CREATE INDEX IF NOT EXISTS routine_deviations_acknowledged_idx ON "RoutineDeviations" ("userId", "isAcknowledged");
+
+-- 10. Create the Safety Check-ins Table (Dead Man's Switch / Safety Escort Timers)
+CREATE TABLE IF NOT EXISTS "SafetyCheckins" (
+    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "userId" UUID NOT NULL REFERENCES "Users" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    "title" VARCHAR(100) DEFAULT 'Safety Escort' NOT NULL,
+    "destination" VARCHAR(255),
+    "destLatitude" DECIMAL(10, 8),
+    "destLongitude" DECIMAL(11, 8),
+    "startLatitude" DECIMAL(10, 8),
+    "startLongitude" DECIMAL(11, 8),
+    "durationMinutes" INTEGER NOT NULL DEFAULT 15,
+    "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL,
+    "status" VARCHAR(20) DEFAULT 'ACTIVE' NOT NULL, -- ACTIVE, COMPLETED, EXPIRED, DURESS_TRIGGERED, CANCELLED
+    "notes" TEXT,
+    "escrowPayload" JSONB,
+    "duressTriggered" BOOLEAN DEFAULT false NOT NULL,
+    "alertId" UUID REFERENCES "Alerts" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
+    "completedAt" TIMESTAMP WITH TIME ZONE,
+    "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS safety_checkins_user_status_idx ON "SafetyCheckins" ("userId", "status");
+CREATE INDEX IF NOT EXISTS safety_checkins_expires_status_idx ON "SafetyCheckins" ("expiresAt", "status");

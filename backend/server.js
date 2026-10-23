@@ -21,6 +21,9 @@ const LocationLog = require('./models/LocationLog');
 const Alert = require('./models/Alert');
 const SafeZone = require('./models/SafeZone');
 const SusFeedback = require('./models/SusFeedback');
+const RoutineAnchor = require('./models/RoutineAnchor');
+const RoutineDeviation = require('./models/RoutineDeviation');
+const SafetyCheckin = require('./models/SafetyCheckin');
 
 const authRoutes = require('./routes/authRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
@@ -30,6 +33,9 @@ const alertRoutes = require('./routes/alertRoutes');
 const verifyRoutes = require('./routes/verifyRoutes');
 const safeZoneRoutes = require('./routes/safeZoneRoutes');
 const susRoutes = require('./routes/susRoutes');
+const routineRoutes = require('./routes/routineRoutes');
+const checkinRoutes = require('./routes/checkinRoutes');
+const checkinSweeper = require('./services/checkinSweeper');
 
 const path = require('path');
 const http = require('http');
@@ -299,6 +305,11 @@ app.use('/api/location', locationRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/geofence', safeZoneRoutes);
 app.use('/api/sus', susRoutes);
+app.use('/api/routine', routineRoutes);
+app.use('/api/checkins', checkinRoutes);
+
+// Start background Dead Man's Switch expiration sweeper
+checkinSweeper.start();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX: Rate-limit the public verify endpoint to prevent brute-force attacks.
@@ -566,6 +577,39 @@ io.on('connection', (socket) => {
         } catch (geofenceErr) {
             console.error('[GEOFENCE] Error evaluating geofence breach:', geofenceErr.message);
         }
+
+        // 4. Routine Deviation Check: Asynchronously evaluate against learned routine anchors
+        // Wrapped in try-catch to ensure it never interferes with the core location pipeline
+        try {
+            const { checkRoutineDeviation } = require('./services/routineEngine');
+            if (device && device.userId) {
+                const deviations = await checkRoutineDeviation(
+                    device.userId,
+                    parseFloat(latitude),
+                    parseFloat(longitude)
+                );
+                if (deviations && deviations.length > 0) {
+                    for (const dev of deviations) {
+                        const deviationPayload = {
+                            deviationId: dev.id,
+                            deviationType: dev.deviationType,
+                            severity: dev.severity,
+                            description: dev.description,
+                            actualLatitude: dev.actualLatitude,
+                            actualLongitude: dev.actualLongitude,
+                            distanceFromAnchorMeters: dev.distanceFromAnchorMeters,
+                            anchorId: dev.anchorId,
+                            detectedAt: dev.detectedAt,
+                        };
+                        io.to(`tracker-${device.userId}`).emit('routine-deviation', deviationPayload);
+                        io.to(`user-${device.userId}`).emit('routine-deviation', deviationPayload);
+                        console.log(`[RoutineEngine] 📡 Deviation broadcast to rooms for user ${device.userId}: ${dev.deviationType}`);
+                    }
+                }
+            }
+        } catch (routineErr) {
+            console.error('[RoutineEngine] Error checking routine deviation:', routineErr.message);
+        }
         } catch (err) {
             console.error('[Socket.IO] Error in location_update handler:', err.message);
         }
@@ -751,11 +795,28 @@ cron.schedule('0 3 * * *', async () => {
     }
 }, { timezone: 'UTC' });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Routine Learning cron job: Runs daily at 02:00 UTC.
+// Analyzes the last 14 days of GPS data using DBSCAN spatial clustering to
+// discover recurring location patterns (routine anchors) for each user.
+// ─────────────────────────────────────────────────────────────────────────────
+cron.schedule('0 2 * * *', async () => {
+    try {
+        const { learnRoutinesForAllUsers } = require('./services/routineEngine');
+        console.log('[Cron] 🧠 Starting daily routine learning for all users...');
+        const newAnchors = await learnRoutinesForAllUsers();
+        console.log(`[Cron] Routine learning complete: ${newAnchors} new anchor(s) discovered.`);
+    } catch (err) {
+        console.error('[Cron] Routine learning failed:', err.message);
+    }
+}, { timezone: 'UTC' });
+
 // Sync DB & Start server
 sequelize.sync({ alter: true }).then(() => {
     server.listen(PORT, '0.0.0.0', () => {
         console.log(`Server running on port ${PORT} (0.0.0.0)`);
         console.log('[Cron] LocationLog pruning job scheduled: daily at 03:00 UTC');
+        console.log('[Cron] Routine learning job scheduled: daily at 02:00 UTC');
     });
 }).catch(err => {
     console.error('Failed to sync db: ' + err.message);

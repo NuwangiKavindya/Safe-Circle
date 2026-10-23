@@ -5,7 +5,13 @@ import {
   SafeZone,
   ContactDeliveryStatus,
   ContactResponse,
-  CreateSafeZonePayload
+  CreateSafeZonePayload,
+  RoutineAnchor,
+  RoutineDeviation,
+  CreateRoutineAnchorPayload,
+  UpdateRoutineAnchorPayload,
+  SafetyCheckin,
+  StartCheckinPayload
 } from '../services/api';
 
 export type ScreenType =
@@ -44,7 +50,13 @@ export type {
   SafeZone,
   ContactDeliveryStatus,
   ContactResponse,
-  CreateSafeZonePayload
+  CreateSafeZonePayload,
+  RoutineAnchor,
+  RoutineDeviation,
+  CreateRoutineAnchorPayload,
+  UpdateRoutineAnchorPayload,
+  SafetyCheckin,
+  StartCheckinPayload
 };
 
 export interface SignUpFormState {

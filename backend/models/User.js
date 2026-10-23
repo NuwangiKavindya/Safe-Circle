@@ -70,6 +70,14 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING(50),
         defaultValue: 'police_siren',
         allowNull: true
+    },
+    safetyPin: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    duressPin: {
+        type: DataTypes.STRING,
+        allowNull: true
     }
 }, {
     timestamps: true,
@@ -79,6 +87,14 @@ const User = sequelize.define('User', {
                 const salt = await bcrypt.genSalt(10);
                 user.password = await bcrypt.hash(user.password, salt);
             }
+            if (user.changed('safetyPin') && user.safetyPin) {
+                const salt = await bcrypt.genSalt(10);
+                user.safetyPin = await bcrypt.hash(user.safetyPin, salt);
+            }
+            if (user.changed('duressPin') && user.duressPin) {
+                const salt = await bcrypt.genSalt(10);
+                user.duressPin = await bcrypt.hash(user.duressPin, salt);
+            }
         }
     }
 });
@@ -86,6 +102,29 @@ const User = sequelize.define('User', {
 // Instance method to check password
 User.prototype.matchPassword = async function (enteredPassword) {
     return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// Instance method to verify PIN (returns { valid: boolean, isDuress: boolean })
+User.prototype.verifyPin = async function (enteredPin) {
+    if (!enteredPin) return { valid: false, isDuress: false };
+    
+    // Check duress PIN first if configured
+    if (this.duressPin) {
+        const isDuress = await bcrypt.compare(enteredPin, this.duressPin);
+        if (isDuress) {
+            return { valid: true, isDuress: true };
+        }
+    }
+    
+    // Check normal safety PIN
+    if (this.safetyPin) {
+        const isNormal = await bcrypt.compare(enteredPin, this.safetyPin);
+        if (isNormal) {
+            return { valid: true, isDuress: false };
+        }
+    }
+    
+    return { valid: false, isDuress: false };
 };
 
 module.exports = User;

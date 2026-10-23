@@ -257,6 +257,151 @@ export interface SharedLocationHistoryResponse {
   }>;
 }
 
+// ── Smart Routine Anomaly Detection Types ──
+
+export interface RoutineAnchor {
+  id: string;
+  userId: string;
+  label: string;
+  latitude: number | string;
+  longitude: number | string;
+  radiusMeters: number;
+  daysMask: number;
+  expectedArrivalMinute: number;
+  expectedDepartureMinute: number;
+  toleranceMinutes: number;
+  observationCount: number;
+  isConfirmed: boolean;
+  isActive: boolean;
+  source: 'LEARNED' | 'MANUAL';
+  schedule?: {
+    days: string[];
+    arrival: string;
+    departure: string;
+  };
+  createdAt?: string;
+}
+
+export interface CreateRoutineAnchorPayload {
+  label: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters?: number;
+  daysMask?: number;
+  expectedArrivalMinute?: number;
+  expectedDepartureMinute?: number;
+  toleranceMinutes?: number;
+}
+
+export interface UpdateRoutineAnchorPayload {
+  label?: string;
+  radiusMeters?: number;
+  daysMask?: number;
+  expectedArrivalMinute?: number;
+  expectedDepartureMinute?: number;
+  toleranceMinutes?: number;
+  isConfirmed?: boolean;
+  isActive?: boolean;
+}
+
+export interface RoutineDeviation {
+  id: string;
+  userId: string;
+  anchorId?: string;
+  deviationType: 'LATE_ARRIVAL' | 'EARLY_DEPARTURE' | 'UNEXPECTED_STOP' | 'MISSED_ANCHOR';
+  actualLatitude?: number | string;
+  actualLongitude?: number | string;
+  distanceFromAnchorMeters?: number;
+  description?: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  isAcknowledged: boolean;
+  notificationSent: boolean;
+  detectedAt: string;
+  anchor?: {
+    id: string;
+    label: string;
+    latitude: number | string;
+    longitude: number | string;
+  };
+}
+
+export interface RoutineAnchorListResponse {
+  success: boolean;
+  message?: string;
+  count?: number;
+  data?: RoutineAnchor[];
+}
+
+export interface RoutineDeviationListResponse {
+  success: boolean;
+  message?: string;
+  count?: number;
+  data?: RoutineDeviation[];
+}
+
+export interface RoutineLearningResponse {
+  success: boolean;
+  message?: string;
+  newAnchorsCount?: number;
+  data?: RoutineAnchor[];
+}
+
+export interface PinStatusResponse {
+  success: boolean;
+  message?: string;
+  data?: {
+    hasSafetyPin: boolean;
+    hasDuressPin: boolean;
+  };
+}
+
+export interface SafetyCheckin {
+  id: string;
+  userId: string;
+  title: string;
+  destination?: string;
+  destLatitude?: number | string;
+  destLongitude?: number | string;
+  startLatitude?: number | string;
+  startLongitude?: number | string;
+  durationMinutes: number;
+  expiresAt: string;
+  status: 'ACTIVE' | 'COMPLETED' | 'EXPIRED' | 'DURESS_TRIGGERED' | 'CANCELLED';
+  notes?: string;
+  escrowPayload?: any;
+  duressTriggered: boolean;
+  alertId?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StartCheckinPayload {
+  title?: string;
+  destination?: string;
+  destLatitude?: number;
+  destLongitude?: number;
+  startLatitude?: number;
+  startLongitude?: number;
+  durationMinutes: number;
+  notes?: string;
+  escrowPayload?: any;
+}
+
+export interface SafetyCheckinResponse {
+  success: boolean;
+  message?: string;
+  covertDuress?: boolean;
+  data?: SafetyCheckin;
+}
+
+export interface SafetyCheckinHistoryResponse {
+  success: boolean;
+  message?: string;
+  total?: number;
+  page?: number;
+  data?: SafetyCheckin[];
+}
 
 class ApiService {
   /**
@@ -1264,6 +1409,365 @@ class ApiService {
         success: false,
         message: error.message || 'Network error occurred while updating alarm sound preference',
       };
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Smart Routine Anomaly Detection
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Get all routine anchors for the current user
+   */
+  async getRoutineAnchors(token: string): Promise<RoutineAnchorListResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/anchors`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch routine anchors' };
+      }
+      return { success: true, count: data.count, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Create a manual routine anchor
+   */
+  async createRoutineAnchor(token: string, payload: CreateRoutineAnchorPayload): Promise<{ success: boolean; data?: RoutineAnchor; message?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/anchors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to create routine anchor' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Update a routine anchor (confirm, rename, adjust schedule)
+   */
+  async updateRoutineAnchor(token: string, anchorId: string, payload: UpdateRoutineAnchorPayload): Promise<{ success: boolean; data?: RoutineAnchor; message?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/anchors/${anchorId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to update routine anchor' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Delete a routine anchor
+   */
+  async deleteRoutineAnchor(token: string, anchorId: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/anchors/${anchorId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to delete routine anchor' };
+      }
+      return { success: true, message: data.message };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Trigger on-demand routine learning from GPS history
+   */
+  async triggerRoutineLearning(token: string): Promise<RoutineLearningResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/learn`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Routine learning failed' };
+      }
+      return { success: true, message: data.message, newAnchorsCount: data.newAnchorsCount, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Get recent routine deviations
+   */
+  async getRoutineDeviations(token: string, options?: { limit?: number; includeAcknowledged?: boolean }): Promise<RoutineDeviationListResponse> {
+    try {
+      const params = new URLSearchParams();
+      if (options?.limit) params.append('limit', options.limit.toString());
+      if (options?.includeAcknowledged) params.append('includeAcknowledged', 'true');
+      const qs = params.toString() ? `?${params.toString()}` : '';
+
+      const response = await fetch(`${API_BASE_URL}/api/routine/deviations${qs}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch deviations' };
+      }
+      return { success: true, count: data.count, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Get routine deviations for a ward (guardian view)
+   */
+  async getWardRoutineDeviations(token: string, wardUserId: string): Promise<RoutineDeviationListResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/deviations/ward/${wardUserId}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch ward deviations' };
+      }
+      return { success: true, count: data.count, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Acknowledge / dismiss a routine deviation
+   */
+  async acknowledgeRoutineDeviation(token: string, deviationId: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/routine/deviations/${deviationId}/acknowledge`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to acknowledge deviation' };
+      }
+      return { success: true, message: data.message };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  // ============================================================================
+  // DEAD MAN'S SWITCH / SAFETY CHECK-IN API METHODS
+  // ============================================================================
+
+  /**
+   * Configure or update Safety and Duress PINs
+   */
+  async configurePins(token: string, safetyPin?: string, duressPin?: string): Promise<PinStatusResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/pins`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ safetyPin, duressPin }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to update PINs' };
+      }
+      return { success: true, message: data.message, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Get PIN configuration status
+   */
+  async getPinStatus(token: string): Promise<PinStatusResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/pins/status`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch PIN status' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Start a new safety check-in timer
+   */
+  async startCheckin(token: string, payload: StartCheckinPayload): Promise<SafetyCheckinResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to start check-in' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Get active check-in
+   */
+  async getActiveCheckin(token: string): Promise<SafetyCheckinResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/active`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch active check-in' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Extend active check-in by N minutes
+   */
+  async extendCheckin(token: string, checkinId: string, minutes: number = 15): Promise<SafetyCheckinResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/${checkinId}/extend`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ minutes }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to extend check-in' };
+      }
+      return { success: true, message: data.message, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Update encrypted escrow payload
+   */
+  async updateCheckinEscrow(token: string, checkinId: string, escrowPayload: any): Promise<SafetyCheckinResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/${checkinId}/escrow`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ escrowPayload }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to update escrow' };
+      }
+      return { success: true, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Resolve / Complete safety check-in using PIN (or trigger silent duress if Duress PIN entered)
+   */
+  async resolveCheckin(
+    token: string,
+    checkinId: string,
+    pin?: string,
+    coords?: { latitude?: number; longitude?: number }
+  ): Promise<SafetyCheckinResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/${checkinId}/checkin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          pin,
+          latitude: coords?.latitude,
+          longitude: coords?.longitude,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to verify check-in' };
+      }
+      return {
+        success: true,
+        message: data.message,
+        covertDuress: data.covertDuress,
+        data: data.data,
+      };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
+    }
+  }
+
+  /**
+   * Get check-in history
+   */
+  async getCheckinHistory(token: string, limit: number = 20, page: number = 1): Promise<SafetyCheckinHistoryResponse> {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/checkins/history?limit=${limit}&page=${page}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return { success: false, message: data.message || 'Failed to fetch check-in history' };
+      }
+      return { success: true, total: data.total, page: data.page, data: data.data };
+    } catch (error: any) {
+      return { success: false, message: error.message || 'Network error occurred' };
     }
   }
 }
